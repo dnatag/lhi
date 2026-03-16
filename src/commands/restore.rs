@@ -1,0 +1,250 @@
+use anyhow::Result;
+use std::fs;
+use std::path::Path;
+
+use crate::index::{Index, IndexEntry};
+use crate::store::BlobStore;
+
+use super::parse_before;
+
+/// Restores files to their state before a given point in time.
+/// Compares current content hashes against stored versions and overwrites
+/// changed files. Files created after the cutoff are deleted.
+pub fn restore(file: Option<&str>, before: &str, dry_run: bool, json: bool) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let index = Index::open(&root)?;
+    let store = BlobStore::init(&root)?;
+    let cutoff = parse_before(before)?;
+    let state = index.state_at(cutoff)?;
+
+    let snapshot_paths: std::collections::HashSet<String> =
+        state.iter().map(|e| e.relative_path.clone()).collect();
+
+    let mut actions: Vec<RestoreAction> = if let Some(f) = file {
+        state.into_iter().filter(|e| e.relative_path == f)
+            .filter_map(|e| to_restore_action(&root, &e)).collect()
+    } else {
+        let mut a: Vec<_> = state.iter().filter_map(|e| to_restore_action(&root, e)).collect();
+        for rel in &index.all_known_paths()? {
+            if !snapshot_paths.contains(rel) && root.join(rel).exists() {
+                a.push(RestoreAction { relative_path: rel.clone(), action: "delete".into(), hash: None, file_mode: None });
+            }
+        }
+        a
+    };
+    actions.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+
+    if actions.is_empty() {
+        if json { println!("[]"); } else { println!("Nothing to restore."); }
+        return Ok(());
+    }
+
+    if json {
+        let out = serde_json::to_string_pretty(&actions)?;
+        println!("{out}");
+    } else {
+        for a in &actions {
+            let verb = if dry_run { "would" } else { "will" };
+            match a.action.as_str() {
+                "restore" => println!("{verb} restore {} (hash: {})", a.relative_path, a.hash.as_deref().unwrap_or("?")),
+                "delete" => println!("{verb} delete {}", a.relative_path),
+                _ => {}
+            }
+        }
+    }
+
+    if !dry_run {
+        for a in &actions {
+            let target = root.join(&a.relative_path);
+            match a.action.as_str() {
+                "restore" => {
+                    if let Some(hash) = &a.hash {
+                        let content = store.read_blob(hash)?;
+                        if let Some(parent) = target.parent() { fs::create_dir_all(parent)?; }
+                        fs::write(&target, content)?;
+                        #[cfg(unix)]
+                        if let Some(mode) = a.file_mode {
+                            use std::os::unix::fs::PermissionsExt;
+                            fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
+                        }
+                    }
+                }
+                "delete" => { let _ = fs::remove_file(&target); }
+                _ => {}
+            }
+        }
+        if !json { println!("Restored {} file(s).", actions.len()); }
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RestoreAction {
+    relative_path: String,
+    action: String,
+    hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_mode: Option<u32>,
+}
+
+/// Compares an index entry against the current file on disk and returns
+/// a `RestoreAction` if the file needs to be restored or deleted.
+fn to_restore_action(root: &Path, entry: &IndexEntry) -> Option<RestoreAction> {
+    let target = root.join(&entry.relative_path);
+    if entry.event_type == "delete" {
+        return target.exists().then(|| RestoreAction {
+            relative_path: entry.relative_path.clone(), action: "delete".into(), hash: None, file_mode: None,
+        });
+    }
+    let hash = entry.content_hash.as_ref()?;
+    let needs_restore = match fs::read(&target).ok() {
+        Some(bytes) => {
+            use sha2::{Digest, Sha256};
+            format!("{:x}", Sha256::new_with_prefix(&bytes).finalize()) != *hash
+        }
+        None => true,
+    };
+    needs_restore.then(|| RestoreAction {
+        relative_path: entry.relative_path.clone(), action: "restore".into(),
+        hash: Some(hash.clone()), file_mode: entry.file_mode,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    fn setup_project() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2026, 3, 14, 11, 0, 0).unwrap();
+        let h1 = store.store_blob(b"fn main() { v1 }").unwrap();
+        let h2 = store.store_blob(b"fn main() { v2 }").unwrap();
+        let h3 = store.store_blob(b"pub fn lib() {}").unwrap();
+        for (ts, et, rp, h, sz) in [
+            (t1, "create", "src/main.rs", &h1, 16u64),
+            (t2, "modify", "src/main.rs", &h2, 16),
+            (t1, "create", "src/lib.rs", &h3, 15),
+        ] {
+            index.append(&IndexEntry {
+                timestamp: ts, event_type: et.into(),
+                path: dir.path().join(rp).display().to_string(),
+                relative_path: rp.into(), content_hash: Some(h.clone()),
+                size_bytes: Some(sz), label: None, file_mode: None,
+            }).unwrap();
+        }
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), "fn main() { v2 }").unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn lib() {}").unwrap();
+        dir
+    }
+
+    #[test]
+    fn restore_dry_run_detects_changes() {
+        let dir = setup_project();
+        fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let cutoff = Utc.with_ymd_and_hms(2026, 3, 14, 10, 30, 0).unwrap();
+        let actions: Vec<RestoreAction> = index.state_at(cutoff).unwrap()
+            .iter().filter_map(|e| to_restore_action(dir.path(), e)).collect();
+        assert!(actions.iter().any(|a| a.relative_path == "src/main.rs" && a.action == "restore"));
+        assert!(!actions.iter().any(|a| a.relative_path == "src/lib.rs"));
+    }
+
+    #[test]
+    fn restore_actually_restores_file() {
+        let dir = setup_project();
+        fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
+        let state = index.state_at(cutoff).unwrap();
+        for e in state.iter().filter(|e| e.relative_path == "src/main.rs") {
+            if let Some(a) = to_restore_action(dir.path(), e) {
+                if let Some(hash) = &a.hash {
+                    let content = store.read_blob(hash).unwrap();
+                    fs::write(dir.path().join(&a.relative_path), content).unwrap();
+                }
+            }
+        }
+        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
+    }
+
+    #[test]
+    fn restore_all_files_before_timestamp() {
+        let dir = setup_project();
+        fs::write(dir.path().join("src/main.rs"), "BROKEN1").unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "BROKEN2").unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
+        for e in &index.state_at(cutoff).unwrap() {
+            if let Some(a) = to_restore_action(dir.path(), e) {
+                if let Some(hash) = &a.hash {
+                    let content = store.read_blob(hash).unwrap();
+                    let target = dir.path().join(&a.relative_path);
+                    if let Some(p) = target.parent() { fs::create_dir_all(p).unwrap(); }
+                    fs::write(&target, content).unwrap();
+                }
+            }
+        }
+        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
+        assert_eq!(fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(), "pub fn lib() {}");
+    }
+
+    #[test]
+    fn restore_deletes_files_created_after_target_time() {
+        let dir = setup_project();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let t3 = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
+        let h = store.store_blob(b"agent garbage").unwrap();
+        index.append(&IndexEntry {
+            timestamp: t3, event_type: "create".into(),
+            path: dir.path().join("src/garbage.rs").display().to_string(),
+            relative_path: "src/garbage.rs".into(), content_hash: Some(h),
+            size_bytes: Some(13), label: None, file_mode: None,
+        }).unwrap();
+        fs::write(dir.path().join("src/garbage.rs"), "agent garbage").unwrap();
+
+        let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
+        let state = index.state_at(cutoff).unwrap();
+        let snapshot_paths: std::collections::HashSet<String> = state.iter().map(|e| e.relative_path.clone()).collect();
+        let all_known = index.all_known_paths().unwrap();
+        for rel in &all_known {
+            if !snapshot_paths.contains(rel) && dir.path().join(rel).exists() {
+                fs::remove_file(dir.path().join(rel)).unwrap();
+            }
+        }
+        assert!(!dir.path().join("src/garbage.rs").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_preserves_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        let h = store.store_blob(b"#!/bin/bash\necho hi").unwrap();
+        index.append(&IndexEntry {
+            timestamp: t1, event_type: "create".into(),
+            path: dir.path().join("run.sh").display().to_string(),
+            relative_path: "run.sh".into(), content_hash: Some(h.clone()),
+            size_bytes: Some(19), label: None, file_mode: Some(0o100755),
+        }).unwrap();
+        fs::write(dir.path().join("run.sh"), "corrupted").unwrap();
+        let entry = &index.state_at(parse_before("2026-03-14T10:30:00Z").unwrap()).unwrap()[0];
+        let a = to_restore_action(dir.path(), entry).unwrap();
+        let content = store.read_blob(a.hash.as_ref().unwrap()).unwrap();
+        fs::write(dir.path().join("run.sh"), content).unwrap();
+        if let Some(mode) = a.file_mode {
+            fs::set_permissions(dir.path().join("run.sh"), fs::Permissions::from_mode(mode)).unwrap();
+        }
+        assert_eq!(fs::metadata(dir.path().join("run.sh")).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+}
