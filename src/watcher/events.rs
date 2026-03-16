@@ -9,7 +9,7 @@ use crate::event::{Diff, EventType, FileInfo, LhiEvent, Project, Snapshot};
 use crate::index::IndexEntry;
 
 use super::helpers;
-use super::{LhiWatcher, DEBOUNCE_MS, MAX_FILE_SIZE};
+use super::watcher::{LhiWatcher, DEBOUNCE_MS, MAX_FILE_SIZE};
 
 impl LhiWatcher {
     /// Blocking iterator that yields the next debounced filesystem event.
