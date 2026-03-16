@@ -10,7 +10,7 @@ pub use compact::compact;
 pub use log::log;
 pub use restore::restore;
 pub use snapshot::snapshot;
-pub use watch::watch;
+pub use watch::{watch, watch_daemon, watch_status, watch_stop};
 
 use anyhow::{bail, Result};
 use chrono::{Duration, Utc};

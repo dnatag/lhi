@@ -44,9 +44,24 @@ Watch a directory for file changes. Records every create, modify, and delete to 
 ```
 Options:
   -v, --verbose  Print events as JSON to stdout
+  -d, --daemon   Run as a background daemon
+
+Subcommands:
+  stop           Stop the background watcher daemon
+  status         Check if the background watcher is running
 ```
 
 On first run, captures a baseline snapshot of all existing files. Respects `.gitignore`. Debounces rapid writes (100ms window). Files over 10MB are skipped.
+
+**Daemon mode:**
+
+```bash
+lhi watch --daemon          # start in background
+lhi watch status            # check if running
+lhi watch stop              # stop the daemon
+```
+
+When running as a daemon, output goes to `.lhi/watch.log` and the PID is stored in `.lhi/watch.pid`.
 
 ### `lhi log [FILE]`
 

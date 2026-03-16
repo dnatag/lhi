@@ -15,12 +15,17 @@ pub struct Cli {
 enum Command {
     /// Watch for file changes
     Watch {
+        #[command(subcommand)]
+        action: Option<WatchAction>,
         /// Directory to watch
         #[arg(default_value = ".")]
         path: PathBuf,
         /// Also print events to stdout
         #[arg(short, long)]
         verbose: bool,
+        /// Run as a background daemon
+        #[arg(short, long)]
+        daemon: bool,
     },
     /// Show change history
     Log {
@@ -62,10 +67,21 @@ enum Command {
     Compact,
 }
 
+#[derive(Subcommand)]
+enum WatchAction {
+    /// Stop the background watcher daemon
+    Stop,
+    /// Check if the background watcher is running
+    Status,
+}
+
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Watch { path, verbose } => commands::watch(&path, verbose),
+        Command::Watch { action: Some(WatchAction::Stop), path, .. } => commands::watch_stop(&path),
+        Command::Watch { action: Some(WatchAction::Status), path, .. } => commands::watch_status(&path),
+        Command::Watch { action: None, path, verbose, daemon: true } => commands::watch_daemon(&path, verbose),
+        Command::Watch { action: None, path, verbose, daemon: false } => commands::watch(&path, verbose),
         Command::Log { file, since, json } => commands::log(file.as_deref(), since.as_deref(), json),
         Command::Cat { hash } => commands::cat(&hash),
         Command::Restore { file, before, dry_run, json } => commands::restore(file.as_deref(), &before, dry_run, json),
