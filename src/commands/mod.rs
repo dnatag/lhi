@@ -47,6 +47,9 @@ fn parse_duration_ago(s: &str) -> Result<chrono::DateTime<Utc>> {
         .ok_or_else(|| anyhow::anyhow!("Cannot parse: '{s}'"))?;
     let num: i64 = num_str.parse()
         .map_err(|_| anyhow::anyhow!("Not a number: '{num_str}'"))?;
+    if num < 0 {
+        bail!("Duration must not be negative: '{s}'");
+    }
     let duration = match unit {
         "s" | "sec" | "second" | "seconds" => Duration::seconds(num),
         "m" | "min" | "minute" | "minutes" => Duration::minutes(num),
@@ -76,6 +79,11 @@ mod tests {
         let t = parse_duration_ago("5m ago").unwrap();
         let expected = Utc::now() - Duration::minutes(5);
         assert!((t - expected).num_seconds().abs() < 2);
+    }
+
+    #[test]
+    fn parse_duration_ago_rejects_negative() {
+        assert!(parse_duration_ago("-5m").is_err());
     }
 
     #[test]

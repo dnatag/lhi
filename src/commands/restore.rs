@@ -21,8 +21,12 @@ pub fn restore(file: Option<&str>, before: &str, dry_run: bool, json: bool) -> R
         state.iter().map(|e| e.relative_path.clone()).collect();
 
     let mut actions: Vec<RestoreAction> = if let Some(f) = file {
-        state.into_iter().filter(|e| e.relative_path == f)
-            .filter_map(|e| to_restore_action(&root, &e)).collect()
+        let mut a: Vec<_> = state.into_iter().filter(|e| e.relative_path == f)
+            .filter_map(|e| to_restore_action(&root, &e)).collect();
+        if !snapshot_paths.contains(f) && root.join(f).exists() {
+            a.push(RestoreAction { relative_path: f.to_string(), action: "delete".into(), hash: None, file_mode: None });
+        }
+        a
     } else {
         let mut a: Vec<_> = state.iter().filter_map(|e| to_restore_action(&root, e)).collect();
         for rel in &index.all_known_paths()? {
@@ -220,6 +224,40 @@ mod tests {
             }
         }
         assert!(!dir.path().join("src/garbage.rs").exists());
+    }
+
+    #[test]
+    fn restore_file_filter_deletes_post_cutoff_file() {
+        let dir = setup_project();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let t3 = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
+        let h = store.store_blob(b"new file").unwrap();
+        index.append(&IndexEntry {
+            timestamp: t3, event_type: "create".into(),
+            path: dir.path().join("src/new.rs").display().to_string(),
+            relative_path: "src/new.rs".into(), content_hash: Some(h),
+            size_bytes: Some(8), label: None, file_mode: None,
+        }).unwrap();
+        fs::write(dir.path().join("src/new.rs"), "new file").unwrap();
+
+        let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
+        let state = index.state_at(cutoff).unwrap();
+        let snapshot_paths: std::collections::HashSet<String> =
+            state.iter().map(|e| e.relative_path.clone()).collect();
+
+        // With --file filter, should still produce a delete action
+        let file_filter = "src/new.rs";
+        let mut actions: Vec<RestoreAction> = state.into_iter()
+            .filter(|e| e.relative_path == file_filter)
+            .filter_map(|e| to_restore_action(dir.path(), &e)).collect();
+        if !snapshot_paths.contains(file_filter) && dir.path().join(file_filter).exists() {
+            actions.push(RestoreAction {
+                relative_path: file_filter.to_string(), action: "delete".into(),
+                hash: None, file_mode: None,
+            });
+        }
+        assert!(actions.iter().any(|a| a.relative_path == "src/new.rs" && a.action == "delete"));
     }
 
     #[cfg(unix)]

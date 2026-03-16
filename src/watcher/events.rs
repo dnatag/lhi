@@ -14,6 +14,9 @@ use super::{LhiWatcher, DEBOUNCE_MS, MAX_FILE_SIZE};
 impl LhiWatcher {
     /// Blocking iterator that yields the next debounced filesystem event.
     /// Coalesces rapid changes to the same file within a debounce window.
+    /// Returns the next debounced filesystem event, blocking until one is ready.
+    /// When no events are pending, polls the receiver with a 60-second idle timeout
+    /// before retrying. Returns `None` if the watcher channel disconnects.
     pub fn next_event(&mut self) -> Option<LhiEvent> {
         let mut pending: HashMap<PathBuf, (EventKind, Instant)> = HashMap::new();
 
