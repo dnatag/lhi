@@ -151,6 +151,7 @@ impl LhiWatcher {
             size_bytes: snapshot.as_ref().map(|s| s.size_bytes),
             label: None,
             file_mode,
+            git_branch: self.git_branch.clone(),
         }) {
             tracing::error!("failed to append index entry for {}: {e}", path.display());
         }

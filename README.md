@@ -20,9 +20,20 @@ lhi watch
 lhi log
 lhi log src/main.rs
 lhi log --since 30m
+lhi log --branch main
 
 # View an old version
 lhi cat <hash>
+
+# Compare two versions
+lhi diff <hash1> <hash2>
+
+# Search through stored file versions
+lhi search "fn main"
+lhi search "TODO" --file src/lib.rs
+
+# Check storage usage
+lhi info
 
 # Restore files to 5 minutes ago
 lhi restore --before 5m --dry-run
@@ -70,12 +81,34 @@ Show change history.
 ```
 Options:
   --since <DURATION>  Filter by time (e.g. 5m, 1h, 2d)
+  --branch <NAME>     Filter by git branch
   --json              Output as JSON
 ```
+
+When git branch tracking is available, each entry shows the branch it was recorded on.
 
 ### `lhi cat <HASH>`
 
 Print the content of a stored file version by its SHA-256 hash (from `lhi log` output).
+
+### `lhi diff <HASH1> <HASH2>`
+
+Show a unified diff between two stored file versions. Output is colorized when stdout is a terminal.
+
+### `lhi search <QUERY>`
+
+Search through stored file contents for a text pattern (case-insensitive).
+
+```
+Options:
+  --file <PATH>  Search only versions of this file
+```
+
+Searches each unique blob once, showing matching lines with file path, timestamp, and line numbers.
+
+### `lhi info`
+
+Show storage statistics: index entries, files tracked, blob count, blob size, and total `.lhi/` disk usage.
 
 ### `lhi restore [FILE] --before <TIME>`
 
@@ -103,14 +136,15 @@ Compact the index to keep only the latest entry per file. Reduces `.lhi/index.js
 ```
 .lhi/
 ├── index.jsonl    Append-only event log (one JSON line per change)
-└── blobs/         Content-addressed file storage (SHA-256)
+└── blobs/         Content-addressed file storage (SHA-256, zstd-compressed)
     ├── a1b2c3...
     └── d4e5f6...
 ```
 
-- **Blob store:** Files are stored by their SHA-256 hash. Identical content is automatically deduplicated. Writes are atomic (temp file + rename).
-- **Index:** JSONL format — each line records timestamp, event type, file path, content hash, and size. Append-only during normal operation; `compact` rewrites it.
+- **Blob store:** Files are stored by their SHA-256 hash. Identical content is automatically deduplicated. Blobs are zstd-compressed on write; old uncompressed blobs are read transparently. Writes are atomic (temp file + rename).
+- **Index:** JSONL format — each line records timestamp, event type, file path, content hash, size, and git branch. Append-only during normal operation; `compact` rewrites it.
 - **Watcher:** Uses OS-native filesystem notifications (`notify` crate) with 100ms debouncing.
+- **Git integration:** Automatically records the current git branch with each event (captured at watcher startup and snapshot time).
 
 ## Logging
 
@@ -128,14 +162,17 @@ Default level is `info` (warnings and errors only).
 ```
 src/
 ├── lib.rs              Module root
-├── util.rs             Shared utilities (SHA-256, file mode)
+├── util.rs             Shared utilities (SHA-256, file mode, git branch)
 ├── core/
 │   ├── event.rs        Event data model (EventType, LhiEvent, etc.)
 │   ├── index.rs        JSONL index (read/write/query/compact)
-│   └── store.rs        Content-addressed blob store
+│   └── store.rs        Content-addressed blob store (zstd-compressed)
 ├── commands/
 │   ├── cat.rs          lhi cat
+│   ├── diff.rs         lhi diff
+│   ├── info.rs         lhi info
 │   ├── log.rs          lhi log
+│   ├── search.rs       lhi search
 │   ├── compact.rs      lhi compact
 │   ├── snapshot.rs     lhi snapshot
 │   ├── restore.rs      lhi restore

@@ -1,14 +1,20 @@
 mod cat;
 mod compact;
+mod diff;
+mod info;
 mod log;
 mod restore;
+mod search;
 mod snapshot;
 mod watch;
 
 pub use cat::cat;
 pub use compact::compact;
+pub use diff::diff;
+pub use info::info;
 pub use log::log;
 pub use restore::restore;
+pub use search::search;
 pub use snapshot::snapshot;
 pub use watch::{watch, watch_daemon, watch_status, watch_stop};
 

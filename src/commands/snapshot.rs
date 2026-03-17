@@ -15,6 +15,7 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
     let store = BlobStore::init(&root)?;
     let label_str = label.unwrap_or("manual snapshot");
     let now = Utc::now();
+    let branch = crate::util::current_git_branch(&root);
     let mut count = 0;
     for entry in ignore::WalkBuilder::new(&root).hidden(false).build().flatten() {
         let path = entry.path();
@@ -34,6 +35,7 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
             path: path.display().to_string(), relative_path: rel_str,
             content_hash: Some(hash), size_bytes: Some(content.len() as u64),
             label: Some(label_str.into()), file_mode: get_file_mode(&meta),
+            git_branch: branch.clone(),
         })?;
         count += 1;
     }
@@ -60,7 +62,7 @@ mod tests {
                 path: dir.path().join(name).display().to_string(),
                 relative_path: name.into(), content_hash: Some(hash),
                 size_bytes: Some(content.len() as u64),
-                label: Some("test".into()), file_mode: None,
+                label: Some("test".into()), file_mode: None, git_branch: None,
             }).unwrap();
         }
 

@@ -21,6 +21,7 @@ pub struct LhiWatcher {
     pub(super) index: Index,
     /// Tracks the last known content hash per file for diff support.
     pub(super) previous_hashes: HashMap<PathBuf, String>,
+    pub(super) git_branch: Option<String>,
     _watcher: notify::RecommendedWatcher,
     pub(super) rx: mpsc::Receiver<notify::Result<Event>>,
 }
@@ -35,8 +36,9 @@ impl LhiWatcher {
         let (gitignore, _) = Gitignore::new(&gitignore_path);
         let store = BlobStore::init(&root)?;
         let index = Index::open(&root)?;
+        let git_branch = crate::util::current_git_branch(&root);
 
-        Self::baseline_snapshot(&root, &store, &index)?;
+        Self::baseline_snapshot(&root, &store, &index, &git_branch)?;
 
         let (tx, rx) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(move |res| {
@@ -50,6 +52,7 @@ impl LhiWatcher {
             store,
             index,
             previous_hashes: HashMap::new(),
+            git_branch,
             _watcher: watcher,
             rx,
         })
@@ -61,6 +64,7 @@ impl LhiWatcher {
         root: &Path,
         store: &BlobStore,
         index: &Index,
+        git_branch: &Option<String>,
     ) -> anyhow::Result<()> {
         if !index.read_all()?.is_empty() {
             return Ok(());
@@ -103,6 +107,7 @@ impl LhiWatcher {
                 size_bytes: Some(content.len() as u64),
                 label: Some("baseline".into()),
                 file_mode,
+                git_branch: git_branch.clone(),
             })?;
         }
         Ok(())
@@ -226,7 +231,8 @@ mod tests {
         let canon = dir.path().canonicalize().unwrap();
         let blob_path = canon.join(".lhi/blobs").join(hash);
         assert!(blob_path.exists(), "blob not written to store");
-        assert_eq!(fs::read(&blob_path).unwrap(), b"version1");
+        let store = BlobStore::init(&canon).unwrap();
+        assert_eq!(store.read_blob(hash).unwrap(), b"version1");
     }
 
     #[test]

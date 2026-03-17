@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::util::hex_sha256;
 
+/// Zstd magic bytes: 0x28B52FFD
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
 pub struct BlobStore {
     blobs_dir: PathBuf,
 }
@@ -19,19 +22,32 @@ impl BlobStore {
         let hash = hex_sha256(content);
         let path = self.blob_path(&hash);
         if !path.exists() {
+            let compressed = zstd::encode_all(content, 3)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             let tmp = path.with_extension("tmp");
-            fs::write(&tmp, content)?;
+            fs::write(&tmp, &compressed)?;
             fs::rename(&tmp, &path)?;
         }
         Ok(hash)
     }
 
     pub fn read_blob(&self, hash: &str) -> io::Result<Vec<u8>> {
-        fs::read(self.blob_path(hash))
+        let raw = fs::read(self.blob_path(hash))?;
+        if raw.starts_with(&ZSTD_MAGIC) {
+            zstd::decode_all(raw.as_slice())
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        } else {
+            Ok(raw)
+        }
     }
 
     pub fn has_blob(&self, hash: &str) -> bool {
         self.blob_path(hash).exists()
+    }
+
+    /// Returns the raw on-disk size of a blob (compressed).
+    pub fn blob_disk_size(&self, hash: &str) -> io::Result<u64> {
+        Ok(fs::metadata(self.blob_path(hash))?.len())
     }
 
     fn blob_path(&self, hash: &str) -> PathBuf {
@@ -65,7 +81,6 @@ mod tests {
         let h1 = store.store_blob(content).unwrap();
         let h2 = store.store_blob(content).unwrap();
         assert_eq!(h1, h2);
-        // Only one file on disk
         let count = fs::read_dir(dir.path().join(".lhi/blobs")).unwrap().count();
         assert_eq!(count, 1);
     }
@@ -103,5 +118,26 @@ mod tests {
         assert!(!dir.path().join(".lhi/blobs").exists());
         BlobStore::init(dir.path()).unwrap();
         assert!(dir.path().join(".lhi/blobs").is_dir());
+    }
+
+    #[test]
+    fn blobs_stored_compressed() {
+        let (_dir, store) = setup();
+        let content = b"hello world this is some content to compress";
+        let hash = store.store_blob(content).unwrap();
+        let raw = fs::read(store.blob_path(&hash)).unwrap();
+        assert!(raw.starts_with(&ZSTD_MAGIC), "blob should be zstd-compressed on disk");
+        // Roundtrip still works
+        assert_eq!(store.read_blob(&hash).unwrap(), content);
+    }
+
+    #[test]
+    fn read_uncompressed_blob_backward_compat() {
+        let (_dir, store) = setup();
+        // Manually write an uncompressed blob (simulating old data)
+        let content = b"old uncompressed blob";
+        let hash = crate::util::hex_sha256(content);
+        fs::write(store.blob_path(&hash), content).unwrap();
+        assert_eq!(store.read_blob(&hash).unwrap(), content);
     }
 }

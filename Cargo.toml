@@ -11,6 +11,8 @@ sha2 = "0.10"
 notify = "7"
 ignore = "0.4"
 clap = { version = "4", features = ["derive"] }
+similar = "2"
+zstd = "0.13"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

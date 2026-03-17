@@ -16,6 +16,8 @@ pub struct IndexEntry {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_mode: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
 }
 
 pub struct Index {
@@ -147,6 +149,7 @@ mod tests {
             size_bytes: Some(100),
             label: None,
             file_mode: None,
+            git_branch: None,
         }
     }
 

@@ -27,7 +27,7 @@ mod tests {
                 timestamp: ts, event_type: "modify".into(),
                 path: "/p/a.rs".into(), relative_path: "a.rs".into(),
                 content_hash: Some(hash.into()), size_bytes: Some(10),
-                label: None, file_mode: None,
+                label: None, file_mode: None, git_branch: None,
             }).unwrap();
         }
         assert_eq!(index.read_all().unwrap().len(), 2);

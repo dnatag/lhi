@@ -137,7 +137,7 @@ mod tests {
                 timestamp: ts, event_type: et.into(),
                 path: dir.path().join(rp).display().to_string(),
                 relative_path: rp.into(), content_hash: Some(h.clone()),
-                size_bytes: Some(sz), label: None, file_mode: None,
+                size_bytes: Some(sz), label: None, file_mode: None, git_branch: None,
             }).unwrap();
         }
         fs::create_dir_all(dir.path().join("src")).unwrap();
@@ -210,7 +210,7 @@ mod tests {
             timestamp: t3, event_type: "create".into(),
             path: dir.path().join("src/garbage.rs").display().to_string(),
             relative_path: "src/garbage.rs".into(), content_hash: Some(h),
-            size_bytes: Some(13), label: None, file_mode: None,
+            size_bytes: Some(13), label: None, file_mode: None, git_branch: None,
         }).unwrap();
         fs::write(dir.path().join("src/garbage.rs"), "agent garbage").unwrap();
 
@@ -237,7 +237,7 @@ mod tests {
             timestamp: t3, event_type: "create".into(),
             path: dir.path().join("src/new.rs").display().to_string(),
             relative_path: "src/new.rs".into(), content_hash: Some(h),
-            size_bytes: Some(8), label: None, file_mode: None,
+            size_bytes: Some(8), label: None, file_mode: None, git_branch: None,
         }).unwrap();
         fs::write(dir.path().join("src/new.rs"), "new file").unwrap();
 
@@ -273,7 +273,7 @@ mod tests {
             timestamp: t1, event_type: "create".into(),
             path: dir.path().join("run.sh").display().to_string(),
             relative_path: "run.sh".into(), content_hash: Some(h.clone()),
-            size_bytes: Some(19), label: None, file_mode: Some(0o100755),
+            size_bytes: Some(19), label: None, file_mode: Some(0o100755), git_branch: None,
         }).unwrap();
         fs::write(dir.path().join("run.sh"), "corrupted").unwrap();
         let entry = &index.state_at(parse_before("2026-03-14T10:30:00Z").unwrap()).unwrap()[0];

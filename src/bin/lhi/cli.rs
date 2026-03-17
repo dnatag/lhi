@@ -34,6 +34,9 @@ enum Command {
         /// Show changes since duration (e.g. 5m, 1h, 2d)
         #[arg(long)]
         since: Option<String>,
+        /// Filter by git branch
+        #[arg(long)]
+        branch: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -43,6 +46,23 @@ enum Command {
         /// Content hash to retrieve
         hash: String,
     },
+    /// Show diff between two blob versions
+    Diff {
+        /// First content hash
+        hash1: String,
+        /// Second content hash
+        hash2: String,
+    },
+    /// Search blob contents
+    Search {
+        /// Text to search for
+        query: String,
+        /// Filter to a specific file
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Show storage statistics
+    Info,
     /// Restore files to a point in time
     Restore {
         /// Restore only this file
@@ -82,8 +102,11 @@ pub fn run() -> anyhow::Result<()> {
         Command::Watch { action: Some(WatchAction::Status), path, .. } => commands::watch_status(&path),
         Command::Watch { action: None, path, verbose, daemon: true } => commands::watch_daemon(&path, verbose),
         Command::Watch { action: None, path, verbose, daemon: false } => commands::watch(&path, verbose),
-        Command::Log { file, since, json } => commands::log(file.as_deref(), since.as_deref(), json),
+        Command::Log { file, since, branch, json } => commands::log(file.as_deref(), since.as_deref(), branch.as_deref(), json),
         Command::Cat { hash } => commands::cat(&hash),
+        Command::Diff { hash1, hash2 } => commands::diff(&hash1, &hash2),
+        Command::Search { query, file } => commands::search(&query, file.as_deref()),
+        Command::Info => commands::info(),
         Command::Restore { file, before, dry_run, json } => commands::restore(file.as_deref(), &before, dry_run, json),
         Command::Snapshot { label } => commands::snapshot(label.as_deref()),
         Command::Compact => commands::compact(),
