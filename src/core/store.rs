@@ -23,7 +23,7 @@ impl BlobStore {
         let path = self.blob_path(&hash);
         if !path.exists() {
             let compressed = zstd::encode_all(content, 3)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             let tmp = path.with_extension("tmp");
             fs::write(&tmp, &compressed)?;
             fs::rename(&tmp, &path)?;

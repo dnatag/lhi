@@ -16,9 +16,8 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
     let mut matches = 0;
 
     for entry in entries.iter().rev() {
-        if let Some(f) = file {
-            if entry.relative_path != f { continue; }
-        }
+        if let Some(f) = file
+            && entry.relative_path != f { continue; }
         let hash = match &entry.content_hash {
             Some(h) => h,
             None => continue,

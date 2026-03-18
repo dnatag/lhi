@@ -33,8 +33,8 @@ impl LhiWatcher {
 
             match self.rx.recv_timeout(timeout) {
                 Ok(Ok(event)) => {
-                    if let Some(path) = event.paths.first() {
-                        if !self.is_ignored(path)
+                    if let Some(path) = event.paths.first()
+                        && !self.is_ignored(path)
                             && matches!(
                                 event.kind,
                                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
@@ -42,7 +42,6 @@ impl LhiWatcher {
                         {
                             pending.insert(path.clone(), (event.kind, Instant::now()));
                         }
-                    }
                 }
                 Ok(Err(_)) => return None,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -97,12 +96,11 @@ impl LhiWatcher {
         let previous_hash = self.previous_hashes.get(path).cloned();
 
         let (snapshot, diff, file_mode) = if path.is_file() {
-            if let Ok(meta) = path.metadata() {
-                if meta.len() > MAX_FILE_SIZE {
+            if let Ok(meta) = path.metadata()
+                && meta.len() > MAX_FILE_SIZE {
                     eprintln!("lhi: skipping large file ({} bytes): {}", meta.len(), path.display());
                     return None;
                 }
-            }
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let hash = self.store.store_blob(&bytes).ok()?;

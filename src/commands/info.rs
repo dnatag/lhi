@@ -21,12 +21,11 @@ pub fn info() -> Result<()> {
         let mut count = 0u64;
         let mut size = 0u64;
         for entry in fs::read_dir(&blobs_dir)?.flatten() {
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_file() {
+            if let Ok(meta) = entry.metadata()
+                && meta.is_file() {
                     count += 1;
                     size += meta.len();
                 }
-            }
         }
         (count, size)
     } else {
