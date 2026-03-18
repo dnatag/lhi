@@ -23,12 +23,24 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
         let relative = path.strip_prefix(&root).unwrap_or(path);
         let rel_str = relative.display().to_string();
         if rel_str.starts_with(".lhi") { continue; }
-        let meta = fs::metadata(path)?;
+        let meta = match fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("snapshot: skipping {}: {e}", path.display());
+                continue;
+            }
+        };
         if meta.len() > MAX_FILE_SIZE {
             eprintln!("lhi: skipping large file ({} bytes): {}", meta.len(), path.display());
             continue;
         }
-        let content = fs::read(path)?;
+        let content = match fs::read(path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("snapshot: skipping {}: {e}", path.display());
+                continue;
+            }
+        };
         let hash = store.store_blob(&content)?;
         index.append(&IndexEntry {
             timestamp: now, event_type: "snapshot".into(),

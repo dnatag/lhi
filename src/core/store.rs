@@ -20,7 +20,7 @@ impl BlobStore {
 
     pub fn store_blob(&self, content: &[u8]) -> io::Result<String> {
         let hash = hex_sha256(content);
-        let path = self.blob_path(&hash);
+        let path = self.blob_path(&hash)?;
         if !path.exists() {
             let compressed = zstd::encode_all(content, 3)
                 .map_err(io::Error::other)?;
@@ -32,7 +32,7 @@ impl BlobStore {
     }
 
     pub fn read_blob(&self, hash: &str) -> io::Result<Vec<u8>> {
-        let raw = fs::read(self.blob_path(hash))?;
+        let raw = fs::read(self.blob_path(hash)?)?;
         if raw.starts_with(&ZSTD_MAGIC) {
             zstd::decode_all(raw.as_slice())
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -42,16 +42,19 @@ impl BlobStore {
     }
 
     pub fn has_blob(&self, hash: &str) -> bool {
-        self.blob_path(hash).exists()
+        self.blob_path(hash).is_ok_and(|p| p.exists())
     }
 
     /// Returns the raw on-disk size of a blob (compressed).
     pub fn blob_disk_size(&self, hash: &str) -> io::Result<u64> {
-        Ok(fs::metadata(self.blob_path(hash))?.len())
+        fs::metadata(self.blob_path(hash)?).map(|m| m.len())
     }
 
-    fn blob_path(&self, hash: &str) -> PathBuf {
-        self.blobs_dir.join(hash)
+    fn blob_path(&self, hash: &str) -> io::Result<PathBuf> {
+        if !hash.bytes().all(|b| b.is_ascii_hexdigit()) || hash.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid hash: {hash}")));
+        }
+        Ok(self.blobs_dir.join(hash))
     }
 }
 
@@ -125,7 +128,7 @@ mod tests {
         let (_dir, store) = setup();
         let content = b"hello world this is some content to compress";
         let hash = store.store_blob(content).unwrap();
-        let raw = fs::read(store.blob_path(&hash)).unwrap();
+        let raw = fs::read(store.blob_path(&hash).unwrap()).unwrap();
         assert!(raw.starts_with(&ZSTD_MAGIC), "blob should be zstd-compressed on disk");
         // Roundtrip still works
         assert_eq!(store.read_blob(&hash).unwrap(), content);
@@ -137,7 +140,17 @@ mod tests {
         // Manually write an uncompressed blob (simulating old data)
         let content = b"old uncompressed blob";
         let hash = crate::util::hex_sha256(content);
-        fs::write(store.blob_path(&hash), content).unwrap();
+        fs::write(store.blob_path(&hash).unwrap(), content).unwrap();
         assert_eq!(store.read_blob(&hash).unwrap(), content);
+    }
+
+    #[test]
+    fn blob_path_rejects_traversal() {
+        let (_dir, store) = setup();
+        assert!(store.read_blob("../../etc/passwd").is_err());
+        assert!(store.read_blob("abc/def").is_err());
+        assert!(store.read_blob("..").is_err());
+        assert!(store.read_blob("").is_err());
+        assert!(!store.has_blob("../../etc/passwd"));
     }
 }

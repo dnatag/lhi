@@ -14,6 +14,7 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
     // Deduplicate: only search each unique hash once
     let mut seen_hashes = std::collections::HashSet::new();
     let mut matches = 0;
+    let query_lower = query.to_lowercase();
 
     for entry in entries.iter().rev() {
         if let Some(f) = file
@@ -33,7 +34,6 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
             Err(_) => continue,
         };
 
-        let query_lower = query.to_lowercase();
         let matching_lines: Vec<_> = text.lines().enumerate()
             .filter(|(_, line)| line.to_lowercase().contains(&query_lower))
             .collect();
