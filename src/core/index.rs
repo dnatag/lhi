@@ -250,4 +250,28 @@ mod tests {
         assert!(idx.read_all().unwrap().is_empty());
         assert!(idx.query_file("anything").unwrap().is_empty());
     }
+
+    #[test]
+    fn git_branch_backward_compat() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = Index::open(dir.path()).unwrap();
+        // Write an entry without git_branch (simulating old data)
+        let json = r#"{"timestamp":"2026-03-14T10:00:00Z","event_type":"modify","path":"/p/a.rs","relative_path":"a.rs","content_hash":"abc","size_bytes":10}"#;
+        std::fs::write(idx.path.clone(), format!("{json}\n")).unwrap();
+        let entries = idx.read_all().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].git_branch, None);
+    }
+
+    #[test]
+    fn git_branch_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = Index::open(dir.path()).unwrap();
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        let mut entry = make_entry("a.rs", "modify", Some("abc"), ts);
+        entry.git_branch = Some("feature-x".into());
+        idx.append(&entry).unwrap();
+        let entries = idx.read_all().unwrap();
+        assert_eq!(entries[0].git_branch.as_deref(), Some("feature-x"));
+    }
 }

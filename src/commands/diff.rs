@@ -30,3 +30,45 @@ pub fn diff(hash1: &str, hash2: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use similar::{ChangeTag, TextDiff};
+    use crate::store::BlobStore;
+
+    #[test]
+    fn diff_identical_blobs_produces_no_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let h = store.store_blob(b"same content\n").unwrap();
+        let b1 = store.read_blob(&h).unwrap();
+        let b2 = store.read_blob(&h).unwrap();
+        let t1 = String::from_utf8_lossy(&b1);
+        let t2 = String::from_utf8_lossy(&b2);
+        let diff = TextDiff::from_lines(t1.as_ref(), t2.as_ref());
+        assert_eq!(diff.unified_diff().context_radius(3).iter_hunks().count(), 0);
+    }
+
+    #[test]
+    fn diff_different_blobs_produces_hunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let h1 = store.store_blob(b"line1\nline2\n").unwrap();
+        let h2 = store.store_blob(b"line1\nchanged\n").unwrap();
+        let b1 = store.read_blob(&h1).unwrap();
+        let b2 = store.read_blob(&h2).unwrap();
+        let t1 = String::from_utf8_lossy(&b1);
+        let t2 = String::from_utf8_lossy(&b2);
+        let diff = TextDiff::from_lines(t1.as_ref(), t2.as_ref());
+        let changes: Vec<_> = diff.iter_all_changes().collect();
+        assert!(changes.iter().any(|c| c.tag() == ChangeTag::Delete && c.value().contains("line2")));
+        assert!(changes.iter().any(|c| c.tag() == ChangeTag::Insert && c.value().contains("changed")));
+    }
+
+    #[test]
+    fn diff_missing_blob_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        assert!(store.read_blob("nonexistent").is_err());
+    }
+}

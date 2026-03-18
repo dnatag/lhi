@@ -40,3 +40,66 @@ pub fn log(file: Option<&str>, since: Option<&str>, branch: Option<&str>, json: 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+    use crate::index::{Index, IndexEntry};
+
+    fn entry(rel: &str, ts: chrono::DateTime<Utc>, branch: Option<&str>) -> IndexEntry {
+        IndexEntry {
+            timestamp: ts, event_type: "modify".into(),
+            path: format!("/p/{rel}"), relative_path: rel.into(),
+            content_hash: Some("abc".into()), size_bytes: Some(10),
+            label: None, file_mode: None,
+            git_branch: branch.map(String::from),
+        }
+    }
+
+    #[test]
+    fn log_branch_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        index.append(&entry("a.rs", ts, Some("main"))).unwrap();
+        index.append(&entry("b.rs", ts, Some("feature"))).unwrap();
+        index.append(&entry("c.rs", ts, None)).unwrap();
+
+        let mut entries = index.read_all().unwrap();
+        entries.retain(|e| e.git_branch.as_deref() == Some("main"));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].relative_path, "a.rs");
+    }
+
+    #[test]
+    fn log_file_and_since_combined() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
+        index.append(&entry("a.rs", t1, None)).unwrap();
+        index.append(&entry("a.rs", t2, None)).unwrap();
+        index.append(&entry("b.rs", t2, None)).unwrap();
+
+        let cutoff = Utc.with_ymd_and_hms(2026, 3, 14, 11, 0, 0).unwrap();
+        let entries: Vec<_> = index.query_file("a.rs").unwrap()
+            .into_iter().filter(|e| e.timestamp >= cutoff).collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].timestamp, t2);
+    }
+
+    #[test]
+    fn log_no_branch_entries_unaffected() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        index.append(&entry("a.rs", ts, None)).unwrap();
+
+        let mut entries = index.read_all().unwrap();
+        // No branch filter — should return all
+        assert_eq!(entries.len(), 1);
+        // With branch filter — should return none (git_branch is None)
+        entries.retain(|e| e.git_branch.as_deref() == Some("main"));
+        assert_eq!(entries.len(), 0);
+    }
+}

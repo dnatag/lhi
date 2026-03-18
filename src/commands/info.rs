@@ -68,3 +68,71 @@ fn human_size(bytes: u64) -> String {
     }
     format!("{size:.1} TB")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn human_size_bytes() {
+        assert_eq!(human_size(0), "0.0 B");
+        assert_eq!(human_size(512), "512.0 B");
+    }
+
+    #[test]
+    fn human_size_kilobytes() {
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn human_size_megabytes() {
+        assert_eq!(human_size(1024 * 1024), "1.0 MB");
+    }
+
+    #[test]
+    fn dir_size_counts_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "hello").unwrap();
+        fs::write(dir.path().join("b.txt"), "world!").unwrap();
+        let size = dir_size(dir.path()).unwrap();
+        assert_eq!(size, 11); // 5 + 6
+    }
+
+    #[test]
+    fn dir_size_recursive() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("a.txt"), "aaa").unwrap();
+        fs::write(dir.path().join("sub/b.txt"), "bbbb").unwrap();
+        let size = dir_size(dir.path()).unwrap();
+        assert_eq!(size, 7); // 3 + 4
+    }
+
+    #[test]
+    fn info_counts_blobs_and_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::BlobStore::init(dir.path()).unwrap();
+        let index = crate::index::Index::open(dir.path()).unwrap();
+        let ts = chrono::Utc::now();
+        let h1 = store.store_blob(b"content1").unwrap();
+        let h2 = store.store_blob(b"content2").unwrap();
+        for (rel, h) in [("a.rs", &h1), ("b.rs", &h2)] {
+            index.append(&crate::index::IndexEntry {
+                timestamp: ts, event_type: "create".into(),
+                path: dir.path().join(rel).display().to_string(),
+                relative_path: rel.into(), content_hash: Some(h.clone()),
+                size_bytes: Some(8), label: None, file_mode: None, git_branch: None,
+            }).unwrap();
+        }
+
+        let entries = index.read_all().unwrap();
+        let unique_files: std::collections::HashSet<_> = entries.iter().map(|e| &e.relative_path).collect();
+        let blobs_dir = dir.path().join(".lhi/blobs");
+        let blob_count = fs::read_dir(&blobs_dir).unwrap().count();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(unique_files.len(), 2);
+        assert_eq!(blob_count, 2);
+    }
+}
