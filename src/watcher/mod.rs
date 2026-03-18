@@ -1,6 +1,5 @@
 mod events;
 mod helpers;
-#[allow(clippy::module_inception)]
-mod watcher;
+mod instance;
 
-pub use watcher::LhiWatcher;
+pub use instance::LhiWatcher;
