@@ -15,18 +15,15 @@ pub struct Cli {
 enum Command {
     /// Watch for file changes
     Watch {
-        #[command(subcommand)]
-        action: Option<WatchAction>,
         /// Directory to watch
         #[arg(default_value = ".")]
         path: PathBuf,
         /// Also print events to stdout
         #[arg(short, long)]
         verbose: bool,
-        /// Run as a background daemon
-        #[arg(short, long)]
-        daemon: bool,
     },
+    /// Print shell hook to auto-start watcher on cd
+    Activate,
     /// Show change history
     Log {
         /// Filter to a specific file
@@ -87,21 +84,11 @@ enum Command {
     Compact,
 }
 
-#[derive(Subcommand)]
-enum WatchAction {
-    /// Stop the background watcher daemon
-    Stop,
-    /// Check if the background watcher is running
-    Status,
-}
-
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Watch { action: Some(WatchAction::Stop), path, .. } => commands::watch_stop(&path),
-        Command::Watch { action: Some(WatchAction::Status), path, .. } => commands::watch_status(&path),
-        Command::Watch { action: None, path, verbose, daemon: true } => commands::watch_daemon(&path, verbose),
-        Command::Watch { action: None, path, verbose, daemon: false } => commands::watch(&path, verbose),
+        Command::Watch { path, verbose } => commands::watch(&path, verbose),
+        Command::Activate => commands::activate(),
         Command::Log { file, since, branch, json } => commands::log(file.as_deref(), since.as_deref(), branch.as_deref(), json),
         Command::Cat { hash } => commands::cat(&hash),
         Command::Diff { hash1, hash2 } => commands::diff(&hash1, &hash2),

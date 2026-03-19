@@ -539,7 +539,6 @@ dependencies = [
  "chrono",
  "clap",
  "ignore",
- "libc",
  "notify",
  "serde",
  "serde_json",

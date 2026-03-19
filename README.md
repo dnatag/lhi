@@ -12,11 +12,18 @@ cargo install --path .
 
 ## Quick start
 
-```bash
-# Start watching the current directory
-lhi watch
+Add this to your `~/.bashrc` or `~/.zshrc`:
 
-# In another terminal — check what changed
+```bash
+eval "$(lhi activate)"
+```
+
+That's it. Now whenever you `cd` into a project that has a `.lhi/` directory, a watcher starts automatically in the background. Multiple projects can be watched concurrently — each gets its own watcher process. All watchers are cleaned up when the shell exits.
+
+To initialize a new project, just run `lhi watch` once (it creates `.lhi/` on first run), then let the shell hook handle it from there.
+
+```bash
+# Check what changed
 lhi log
 lhi log src/main.rs
 lhi log --since 30m
@@ -48,6 +55,26 @@ lhi compact
 
 ## Commands
 
+### `lhi activate`
+
+Prints a shell hook script to stdout. Designed to be `eval`'d in your shell rc file:
+
+```bash
+eval "$(lhi activate)"
+```
+
+The hook:
+- Overrides `cd`, `pushd`, and `popd` to detect `.lhi/` projects
+- Walks up parent directories (so `cd ~/project/src/deep` activates `~/project`)
+- Starts `lhi watch` in the background for each new project entered
+- Tracks multiple concurrent watchers (one per project root)
+- Re-launches a watcher if its process dies
+- Kills all watchers on shell exit (`EXIT` trap)
+
+To manually stop all watchers and remove the hook, run `_lhi_deactivate` in your shell.
+
+Supports bash and zsh. Fish support is planned.
+
 ### `lhi watch [PATH]`
 
 Watch a directory for file changes. Records every create, modify, and delete to `.lhi/`.
@@ -55,24 +82,11 @@ Watch a directory for file changes. Records every create, modify, and delete to 
 ```
 Options:
   -v, --verbose  Print events as JSON to stdout
-  -d, --daemon   Run as a background daemon
-
-Subcommands:
-  stop           Stop the background watcher daemon
-  status         Check if the background watcher is running
 ```
+
+Runs in the foreground (blocking). Useful for troubleshooting or one-off use. The `lhi activate` shell hook uses this command internally.
 
 On first run, captures a baseline snapshot of all existing files. Respects `.gitignore`. Debounces rapid writes (100ms window). Files over 10MB are skipped.
-
-**Daemon mode:**
-
-```bash
-lhi watch --daemon          # start in background
-lhi watch status            # check if running
-lhi watch stop              # stop the daemon
-```
-
-When running as a daemon, output goes to `.lhi/watch.log` and the PID is stored in `.lhi/watch.pid`.
 
 ### `lhi log [FILE]`
 
@@ -168,6 +182,7 @@ src/
 │   ├── index.rs        JSONL index (read/write/query/compact)
 │   └── store.rs        Content-addressed blob store (zstd-compressed)
 ├── commands/
+│   ├── activate.rs     lhi activate (shell hook generation)
 │   ├── cat.rs          lhi cat
 │   ├── diff.rs         lhi diff
 │   ├── info.rs         lhi info
