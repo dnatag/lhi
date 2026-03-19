@@ -71,6 +71,10 @@ The hook:
 - Re-launches a watcher if its process dies
 - Kills all watchers on shell exit (`EXIT` trap)
 
+Shell-specific implementations are emitted for portability:
+- **bash** — uses a newline-delimited string to track watchers (compatible with bash 3.2 on macOS)
+- **zsh** — uses native `typeset -A` associative arrays with zsh syntax
+
 To manually stop all watchers and remove the hook, run `_lhi_deactivate` in your shell.
 
 Supports bash and zsh. Fish support is planned.
@@ -182,7 +186,7 @@ src/
 │   ├── index.rs        JSONL index (read/write/query/compact)
 │   └── store.rs        Content-addressed blob store (zstd-compressed)
 ├── commands/
-│   ├── activate.rs     lhi activate (shell hook generation)
+│   ├── activate.rs     lhi activate (shell hook generation, bash + zsh)
 │   ├── cat.rs          lhi cat
 │   ├── diff.rs         lhi diff
 │   ├── info.rs         lhi info
@@ -199,6 +203,9 @@ src/
 └── bin/lhi/
     ├── main.rs         Entry point
     └── cli.rs          Clap CLI definition
+docs/
+├── reviewsmith-report.md   Code review report
+└── developer-guide.md      Developer walkthrough for activate module
 ```
 
 ## License
