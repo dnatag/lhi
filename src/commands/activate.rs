@@ -42,6 +42,7 @@ fn bash_hook() -> &'static str {
 # eval "$(lhi activate)" in your .bashrc / .zshrc
 
 _LHI_WATCHERS=""
+touch "$HOME/.lhi-watch.log" 2>/dev/null
 
 _lhi_find_root() {
     local dir="$1"
@@ -127,6 +128,7 @@ fn zsh_hook() -> &'static str {
 # eval "$(lhi activate)" in your .bashrc / .zshrc
 
 typeset -A _LHI_PIDS
+touch "$HOME/.lhi-watch.log" 2>/dev/null
 
 _lhi_find_root() {
     local dir="$1"
