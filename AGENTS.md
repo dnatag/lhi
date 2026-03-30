@@ -15,7 +15,7 @@ bin/lhi  →  commands  →  core (index, store, event)
 ```
 
 - **core/** — Data layer. `Index` manages the JSONL index, `BlobStore` handles content-addressed blobs (zstd-compressed, backward-compatible with uncompressed), `event` defines serializable types. Core types return `io::Result`.
-- **commands/** — One file per CLI subcommand. All return `anyhow::Result`. Shared time-parsing utilities in `mod.rs`. `activate.rs` is special: it generates shell scripts (one per supported shell) rather than performing direct actions.
+- **commands/** — One file per CLI subcommand. All return `anyhow::Result`. Shared time-parsing utilities in `mod.rs`. `activate.rs` is special: it generates shell scripts (one per supported shell) rather than performing direct actions. `cat.rs`, `diff.rs`, and `search.rs` use `bat` as a library for syntax-highlighted terminal output, with `diff.rs` also piping to `delta` if available.
 - **watcher/** — Real-time filesystem monitoring with `notify` crate. Debounces events (100ms), respects `.gitignore`, stores blobs and index entries. Captures git branch at startup.
 - **util.rs** — Shared `hex_sha256`, `get_file_mode`, and `current_git_branch` used by core, commands, and watcher.
 - **bin/lhi/** — Thin CLI layer using `clap`. `main.rs` initializes tracing, `cli.rs` dispatches to commands.
@@ -38,6 +38,7 @@ bin/lhi  →  commands  →  core (index, store, event)
 - **`.lhi` filtering:** `baseline_snapshot` and `snapshot` command skip `.lhi` via string prefix check. The watcher relies on `.gitignore` containing `.lhi/`.
 - **Git branch:** Captured once at watcher startup and snapshot time, not per-event. Stored as `Option<String>` — `None` when not in a git repo.
 - **Shell hook portability:** `activate.rs` emits separate scripts for bash and zsh. Bash script avoids associative arrays (bash 3.2 on macOS lacks them) and uses a newline-delimited string instead. Zsh script uses native `typeset -A` with zsh-specific key iteration (`${(k)arr[@]}`) and existence checks (`${+arr[key]}`). These syntaxes are not interchangeable — do not attempt a single "portable" script for both shells.
+- **Terminal output:** `cat`, `diff`, and `search` use `bat` as a library (`PrettyPrinter`) for syntax-highlighted output when stdout is a terminal. When piped, they emit plain/raw output for composability. `diff` additionally tries piping to `delta` CLI if installed before falling back to bat. The `bat` dependency uses `default-features = false` with `regex-fancy` (pure Rust, no C deps). Filenames for syntax auto-detection are resolved from the index via hash lookup.
 
 ## Running tests
 

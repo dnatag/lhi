@@ -13,6 +13,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Initialize .lhi/ in a directory
+    Init {
+        /// Directory to initialize
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Watch for file changes
     Watch {
         /// Directory to watch
@@ -38,17 +44,21 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Print snapshot content by hash
+    /// Print snapshot content by hash or file reference
     Cat {
-        /// Content hash to retrieve
-        hash: String,
+        /// Hash, short hash prefix, or file path
+        target: String,
+        /// Revision number (e.g. ~2 for 2nd most recent)
+        rev: Option<String>,
     },
-    /// Show diff between two blob versions
+    /// Show diff between two blob versions or file revisions
     Diff {
-        /// First content hash
-        hash1: String,
-        /// Second content hash
-        hash2: String,
+        /// First hash, or file path when using ~N revisions
+        arg1: String,
+        /// Second hash, or ~N revision
+        arg2: Option<String>,
+        /// Second ~N revision (when arg1 is file, arg2 is ~N)
+        arg3: Option<String>,
     },
     /// Search blob contents
     Search {
@@ -62,11 +72,16 @@ enum Command {
     Info,
     /// Restore files to a point in time
     Restore {
-        /// Restore only this file
+        /// File to restore (with optional ~N revision)
         file: Option<String>,
+        /// Revision (~N) for single-file restore
+        rev: Option<String>,
+        /// Restore to the moment a specific hash was recorded
+        #[arg(long)]
+        at: Option<String>,
         /// Time to restore to (e.g. 5m, 14:30, ISO 8601)
         #[arg(long)]
-        before: String,
+        before: Option<String>,
         /// Preview without making changes
         #[arg(long)]
         dry_run: bool,
@@ -87,14 +102,15 @@ enum Command {
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Init { path } => commands::init(&path),
         Command::Watch { path, verbose } => commands::watch(&path, verbose),
         Command::Activate => commands::activate(),
         Command::Log { file, since, branch, json } => commands::log(file.as_deref(), since.as_deref(), branch.as_deref(), json),
-        Command::Cat { hash } => commands::cat(&hash),
-        Command::Diff { hash1, hash2 } => commands::diff(&hash1, &hash2),
+        Command::Cat { target, rev } => commands::cat(&target, rev.as_deref()),
+        Command::Diff { arg1, arg2, arg3 } => commands::diff(&arg1, arg2.as_deref(), arg3.as_deref()),
         Command::Search { query, file } => commands::search(&query, file.as_deref()),
         Command::Info => commands::info(),
-        Command::Restore { file, before, dry_run, json } => commands::restore(file.as_deref(), &before, dry_run, json),
+        Command::Restore { file, rev, at, before, dry_run, json } => commands::restore(file.as_deref(), rev.as_deref(), at.as_deref(), before.as_deref(), dry_run, json),
         Command::Snapshot { label } => commands::snapshot(label.as_deref()),
         Command::Compact => commands::compact(),
     }

@@ -56,6 +56,33 @@ impl BlobStore {
         }
         Ok(self.blobs_dir.join(hash))
     }
+
+    /// Resolves a short hash prefix to the full hash.
+    /// Returns an error if the prefix is ambiguous (matches multiple blobs) or not found.
+    pub fn resolve_prefix(&self, prefix: &str) -> io::Result<String> {
+        if !prefix.bytes().all(|b| b.is_ascii_hexdigit()) || prefix.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid hash prefix: {prefix}")));
+        }
+        // If it's already a full hash and exists, return it directly
+        let full_path = self.blobs_dir.join(prefix);
+        if full_path.exists() {
+            return Ok(prefix.to_string());
+        }
+        // Scan for prefix matches
+        let mut matches = Vec::new();
+        for entry in fs::read_dir(&self.blobs_dir)? {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(prefix) {
+                matches.push(name.into_owned());
+            }
+        }
+        match matches.len() {
+            0 => Err(io::Error::new(io::ErrorKind::NotFound, format!("no blob matching prefix: {prefix}"))),
+            1 => Ok(matches.into_iter().next().unwrap()),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("ambiguous prefix {prefix}: {} matches", matches.len()))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -152,5 +179,51 @@ mod tests {
         assert!(store.read_blob("..").is_err());
         assert!(store.read_blob("").is_err());
         assert!(!store.has_blob("../../etc/passwd"));
+    }
+
+    #[test]
+    fn resolve_prefix_full_hash() {
+        let (_dir, store) = setup();
+        let hash = store.store_blob(b"content").unwrap();
+        assert_eq!(store.resolve_prefix(&hash).unwrap(), hash);
+    }
+
+    #[test]
+    fn resolve_prefix_short_prefix() {
+        let (_dir, store) = setup();
+        let hash = store.store_blob(b"content").unwrap();
+        let prefix = &hash[..8];
+        assert_eq!(store.resolve_prefix(prefix).unwrap(), hash);
+    }
+
+    #[test]
+    fn resolve_prefix_not_found() {
+        let (_dir, store) = setup();
+        assert!(store.resolve_prefix("deadbeef").is_err());
+    }
+
+    #[test]
+    fn resolve_prefix_invalid_chars() {
+        let (_dir, store) = setup();
+        assert!(store.resolve_prefix("xyz!").is_err());
+        assert!(store.resolve_prefix("").is_err());
+    }
+
+    #[test]
+    fn resolve_prefix_ambiguous() {
+        let (_dir, store) = setup();
+        // Store many blobs — a 1-char prefix is likely ambiguous
+        for i in 0..50u8 {
+            store.store_blob(&[i]).unwrap();
+        }
+        // Try single-char prefix — should be ambiguous for common hex chars
+        let hash = store.store_blob(b"test").unwrap();
+        let one_char = &hash[..1];
+        // Either resolves uniquely or errors as ambiguous — both are valid
+        let result = store.resolve_prefix(one_char);
+        if result.is_err() {
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("ambiguous"));
+        }
     }
 }

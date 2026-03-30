@@ -103,7 +103,13 @@ impl LhiWatcher {
                 }
             match std::fs::read(path) {
                 Ok(bytes) => {
-                    let hash = self.store.store_blob(&bytes).ok()?;
+                    let hash = match self.store.store_blob(&bytes) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            tracing::error!("failed to store blob for {}: {e}", path.display());
+                            return None;
+                        }
+                    };
                     let diff = previous_hash
                         .as_ref()
                         .filter(|prev| *prev != &hash)
@@ -122,7 +128,10 @@ impl LhiWatcher {
                         mode,
                     )
                 }
-                Err(_) => return None,
+                Err(e) => {
+                    tracing::warn!("failed to read {}: {e}", path.display());
+                    return None;
+                }
             }
         } else {
             if matches!(event_type, EventType::Delete) {
@@ -172,8 +181,12 @@ impl LhiWatcher {
         })
     }
 
-    /// Returns true if the path should be ignored based on .gitignore rules.
+    /// Returns true if the path should be ignored based on .gitignore rules
+    /// or if it lives inside any `.lhi/` directory (at any nesting level).
     pub(super) fn is_ignored(&self, path: &Path) -> bool {
+        if path.components().any(|c| c.as_os_str() == ".lhi") {
+            return true;
+        }
         let is_dir = path.is_dir();
         self.gitignore
             .matched_path_or_any_parents(path, is_dir)

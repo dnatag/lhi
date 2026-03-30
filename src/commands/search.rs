@@ -1,20 +1,25 @@
+use std::io::IsTerminal;
+
 use anyhow::Result;
+use bat::PrettyPrinter;
+use bat::line_range::{LineRange, LineRanges};
 use chrono::Local;
 
 use crate::index::Index;
 use crate::store::BlobStore;
 
 /// Searches blob contents for a query string.
+/// Shows syntax-highlighted context around matches when stdout is a terminal.
 pub fn search(query: &str, file: Option<&str>) -> Result<()> {
     let root = std::env::current_dir()?;
     let index = Index::open(&root)?;
     let store = BlobStore::init(&root)?;
     let entries = index.read_all()?;
 
-    // Deduplicate: only search each unique hash once
     let mut seen_hashes = std::collections::HashSet::new();
     let mut matches = 0;
     let query_lower = query.to_lowercase();
+    let color = std::io::stdout().is_terminal();
 
     for entry in entries.iter().rev() {
         if let Some(f) = file
@@ -34,18 +39,41 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
             Err(_) => continue,
         };
 
-        let matching_lines: Vec<_> = text.lines().enumerate()
+        let matching_lines: Vec<usize> = text.lines().enumerate()
             .filter(|(_, line)| line.to_lowercase().contains(&query_lower))
+            .map(|(i, _)| i + 1) // 1-indexed
             .collect();
 
-        if !matching_lines.is_empty() {
-            let ts = entry.timestamp.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
-            let short_hash = hash.get(..8).unwrap_or(hash);
+        if matching_lines.is_empty() { continue; }
+
+        let ts = entry.timestamp.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
+        let short_hash = hash.get(..8).unwrap_or(hash);
+        matches += matching_lines.len();
+
+        if color {
             println!("--- {} ({short_hash}) {ts}", entry.relative_path);
-            for (num, line) in &matching_lines {
-                println!("  {}:{}", num + 1, line);
+            // Build line ranges: 2 lines of context around each match
+            let total_lines = text.lines().count();
+            let ranges: Vec<LineRange> = matching_lines.iter().map(|&ln| {
+                LineRange::new(ln.saturating_sub(2).max(1), (ln + 2).min(total_lines))
+            }).collect();
+
+            let mut pp = PrettyPrinter::new();
+            pp.input(bat::Input::from_bytes(blob.as_slice()).name(&entry.relative_path))
+                .line_numbers(true)
+                .grid(true)
+                .snip(true)
+                .line_ranges(LineRanges::from(ranges));
+            for &ln in &matching_lines {
+                pp.highlight(ln);
             }
-            matches += matching_lines.len();
+            let _ = pp.print();
+        } else {
+            println!("--- {} ({short_hash}) {ts}", entry.relative_path);
+            for ln in &matching_lines {
+                let line = text.lines().nth(ln - 1).unwrap_or("");
+                println!("  {ln}:{line}");
+            }
         }
     }
 
@@ -120,7 +148,6 @@ mod tests {
         let index = Index::open(dir.path()).unwrap();
         let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
         let t2 = Utc.with_ymd_and_hms(2026, 3, 14, 11, 0, 0).unwrap();
-        // Same content, two index entries (e.g. snapshot + modify)
         let content = b"fn search_me() {}";
         index.append(&make_entry(dir.path(), "a.rs", content, t1, &store)).unwrap();
         index.append(&make_entry(dir.path(), "a.rs", content, t2, &store)).unwrap();
@@ -161,5 +188,47 @@ mod tests {
         let hash = store.store_blob(&[0xFF, 0xFE, 0x00, 0x01]).unwrap();
         let blob = store.read_blob(&hash).unwrap();
         assert!(std::str::from_utf8(&blob).is_err(), "binary content should fail utf8 parse");
+    }
+
+    #[test]
+    fn search_matching_lines_are_one_indexed() {
+        let text = "line one\nline two\nline three\n";
+        let query = "two";
+        let matching: Vec<usize> = text.lines().enumerate()
+            .filter(|(_, line)| line.to_lowercase().contains(query))
+            .map(|(i, _)| i + 1)
+            .collect();
+        assert_eq!(matching, vec![2]);
+    }
+
+    #[test]
+    fn search_multiple_matches_in_single_blob() {
+        let text = "fn foo() {}\nfn bar() {}\nstruct Baz;\nfn qux() {}\n";
+        let query = "fn";
+        let matching: Vec<usize> = text.lines().enumerate()
+            .filter(|(_, line)| line.to_lowercase().contains(query))
+            .map(|(i, _)| i + 1)
+            .collect();
+        assert_eq!(matching, vec![1, 2, 4]);
+    }
+
+    #[test]
+    fn search_context_range_clamps_to_bounds() {
+        let total_lines = 5;
+
+        // Match on line 1 — context should not go below 1
+        let ln = 1usize;
+        let (lo, hi) = (ln.saturating_sub(2).max(1), (ln + 2).min(total_lines));
+        assert_eq!((lo, hi), (1, 3));
+
+        // Match on last line — context should not exceed total
+        let ln = 5usize;
+        let (lo, hi) = (ln.saturating_sub(2).max(1), (ln + 2).min(total_lines));
+        assert_eq!((lo, hi), (3, 5));
+
+        // Match in the middle
+        let ln = 3usize;
+        let (lo, hi) = (ln.saturating_sub(2).max(1), (ln + 2).min(total_lines));
+        assert_eq!((lo, hi), (1, 5));
     }
 }

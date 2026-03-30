@@ -2,6 +2,7 @@ mod cat;
 mod compact;
 mod diff;
 mod info;
+mod init;
 mod log;
 mod restore;
 mod search;
@@ -13,6 +14,7 @@ pub use cat::cat;
 pub use compact::compact;
 pub use diff::diff;
 pub use info::info;
+pub use init::init;
 pub use log::log;
 pub use restore::restore;
 pub use search::search;
@@ -26,6 +28,26 @@ use chrono::{Duration, Utc};
 pub(crate) use crate::util::get_file_mode;
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Returns the Nth most recent content hash for a file (1-indexed, ~1 = latest).
+pub(crate) fn file_revision(index: &crate::index::Index, file: &str, n: usize) -> Result<String> {
+    let entries = index.query_file(file)?;
+    let hashes: Vec<_> = entries.iter().rev()
+        .filter_map(|e| e.content_hash.as_deref())
+        .collect();
+    if hashes.is_empty() {
+        bail!("no history for file: {file}");
+    }
+    if n == 0 || n > hashes.len() {
+        bail!("revision ~{n} out of range (file has {} revisions)", hashes.len());
+    }
+    Ok(hashes[n - 1].to_string())
+}
+
+/// Parses a ~N string into the revision number. Returns None if not a ~N pattern.
+pub(crate) fn parse_rev(s: &str) -> Option<usize> {
+    s.strip_prefix('~')?.parse().ok()
+}
 
 /// Parses a "since" duration string (e.g. "5m", "1h") into a UTC timestamp.
 fn parse_since(s: &str) -> Result<chrono::DateTime<Utc>> { parse_duration_ago(s) }
@@ -122,5 +144,67 @@ mod tests {
     #[test]
     fn parse_before_rejects_garbage() {
         assert!(parse_before("not-a-time").is_err());
+    }
+
+    #[test]
+    fn parse_rev_valid() {
+        assert_eq!(parse_rev("~1"), Some(1));
+        assert_eq!(parse_rev("~5"), Some(5));
+        assert_eq!(parse_rev("~100"), Some(100));
+    }
+
+    #[test]
+    fn parse_rev_invalid() {
+        assert_eq!(parse_rev("1"), None);
+        assert_eq!(parse_rev("~"), None);
+        assert_eq!(parse_rev("~abc"), None);
+        assert_eq!(parse_rev(""), None);
+        assert_eq!(parse_rev("hello"), None);
+    }
+
+    #[test]
+    fn file_revision_returns_latest_as_1() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::BlobStore::init(dir.path()).unwrap();
+        let index = crate::index::Index::open(dir.path()).unwrap();
+        let t1 = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 3, 14, 10, 0, 0).unwrap();
+        let t2 = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 3, 14, 11, 0, 0).unwrap();
+        let h1 = store.store_blob(b"v1").unwrap();
+        let h2 = store.store_blob(b"v2").unwrap();
+        for (ts, h) in [(t1, &h1), (t2, &h2)] {
+            index.append(&crate::index::IndexEntry {
+                timestamp: ts, event_type: "modify".into(),
+                path: "a.rs".into(), relative_path: "a.rs".into(),
+                content_hash: Some(h.clone()), size_bytes: Some(2),
+                label: None, file_mode: None, git_branch: None,
+            }).unwrap();
+        }
+        assert_eq!(file_revision(&index, "a.rs", 1).unwrap(), h2);
+        assert_eq!(file_revision(&index, "a.rs", 2).unwrap(), h1);
+    }
+
+    #[test]
+    fn file_revision_out_of_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::BlobStore::init(dir.path()).unwrap();
+        let index = crate::index::Index::open(dir.path()).unwrap();
+        let ts = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 3, 14, 10, 0, 0).unwrap();
+        let h = store.store_blob(b"only").unwrap();
+        index.append(&crate::index::IndexEntry {
+            timestamp: ts, event_type: "create".into(),
+            path: "a.rs".into(), relative_path: "a.rs".into(),
+            content_hash: Some(h), size_bytes: Some(4),
+            label: None, file_mode: None, git_branch: None,
+        }).unwrap();
+        assert!(file_revision(&index, "a.rs", 0).is_err());
+        assert!(file_revision(&index, "a.rs", 2).is_err());
+    }
+
+    #[test]
+    fn file_revision_no_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let _store = crate::store::BlobStore::init(dir.path()).unwrap();
+        let index = crate::index::Index::open(dir.path()).unwrap();
+        assert!(file_revision(&index, "nonexistent.rs", 1).is_err());
     }
 }

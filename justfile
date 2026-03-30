@@ -51,3 +51,11 @@ clean:
 # Run lhi with arguments
 run *args:
     cargo run --bin lhi -- {{args}}
+
+# Build mdbook documentation
+book-build:
+    mdbook build
+
+# Serve mdbook with live reload
+book-serve:
+    mdbook serve --open

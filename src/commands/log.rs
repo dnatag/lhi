@@ -30,12 +30,24 @@ pub fn log(file: Option<&str>, since: Option<&str>, branch: Option<&str>, json: 
     } else if entries.is_empty() {
         println!("No history found.");
     } else {
+        // Compute per-file revision numbers (~1 = newest)
+        let mut file_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        // Count total per file first (entries are oldest-first)
         for e in &entries {
+            *file_counts.entry(&e.relative_path).or_insert(0) += 1;
+        }
+        let mut file_seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for e in &entries {
+            let seen = file_seen.entry(&e.relative_path).or_insert(0);
+            *seen += 1;
+            let total = file_counts[e.relative_path.as_str()];
+            let rev = total - *seen + 1; // newest = ~1
             let ts = e.timestamp.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             let hash = e.content_hash.as_deref().map(|h| h.get(..8).unwrap_or(h)).unwrap_or("--------");
             let size = e.size_bytes.map(|s| format!("{s}B")).unwrap_or_default();
             let branch_str = e.git_branch.as_deref().map(|b| format!(" [{b}]")).unwrap_or_default();
-            println!("{ts}  {:<8} {hash}  {size:>8}  {}{branch_str}", e.event_type, e.relative_path);
+            let rev_str = if file.is_some() { format!("~{rev:<3} ") } else { String::new() };
+            println!("{rev_str}{ts}  {:<8} {hash}  {size:>8}  {}{branch_str}", e.event_type, e.relative_path);
         }
     }
     Ok(())

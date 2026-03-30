@@ -1,9 +1,5 @@
 # lhi activate — Developer Guide
 
-<!-- reviewsmith:guide -->
-<!-- reviewsmith:generated:2026-03-18T21:40Z -->
-<!-- reviewsmith:scope:partial -->
-<!-- reviewsmith:modules:commands::activate -->
 
 > This guide is written for a human developer working on this project without
 > AI assistance. It explains what the `activate` module does, how the shell
@@ -41,7 +37,6 @@ src/bin/lhi/
 
 ## Module walkthrough: commands::activate
 
-<!-- reviewsmith:module:commands::activate -->
 
 This module has three functions and no types. It generates shell code — the Rust is just a delivery mechanism.
 
@@ -67,7 +62,6 @@ This module has three functions and no types. It generates shell code — the Ru
 - `detect_shell` takes `&str` instead of reading env directly because `env::set_var` is unsafe in edition 2024. Don't change this to read env in tests.
 - The `declare -f cd | tail -n +2` idiom extracts a function body. It works in both bash and zsh but the output format differs slightly — test in both.
 
-<!-- reviewsmith:end:commands::activate -->
 
 ## Data flow
 

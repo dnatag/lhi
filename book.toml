@@ -1,0 +1,9 @@
+[book]
+title = "lhi"
+description = "Local history for your code"
+authors = ["dnatag"]
+language = "en"
+src = "doc/src"
+
+[build]
+build-dir = "doc/book"

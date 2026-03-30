@@ -76,7 +76,7 @@ impl LhiWatcher {
             }
             let relative = path.strip_prefix(root).unwrap_or(path);
             let rel_str = relative.display().to_string();
-            if rel_str.starts_with(".lhi") {
+            if rel_str.starts_with(".lhi") || rel_str.contains("/.lhi") {
                 continue;
             }
             let meta = match path.metadata() {
@@ -96,7 +96,13 @@ impl LhiWatcher {
                     continue;
                 }
             };
-            let hash = store.store_blob(&content)?;
+            let hash = match store.store_blob(&content) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!("baseline: failed to store {}: {e}", path.display());
+                    continue;
+                }
+            };
             let file_mode = helpers::get_file_mode(&meta);
             index.append(&IndexEntry {
                 timestamp: Utc::now(),

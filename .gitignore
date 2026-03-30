@@ -201,3 +201,6 @@ cython_debug/
 
 /target
 .idea/
+
+# mdbook build output
+doc/book/

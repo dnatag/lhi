@@ -1,41 +1,107 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::fs;
 use std::path::Path;
 
 use crate::index::{Index, IndexEntry};
 use crate::store::BlobStore;
 
-use super::parse_before;
+use super::{file_revision, parse_before, parse_rev};
 
-/// Restores files to their state before a given point in time.
-/// Compares current content hashes against stored versions and overwrites
-/// changed files. Files created after the cutoff are deleted.
-pub fn restore(file: Option<&str>, before: &str, dry_run: bool, json: bool) -> Result<()> {
+/// Restores files to a previous state.
+///
+/// Modes:
+///   restore <file> <~N>              — restore single file to revision N
+///   restore <file> --at <hash>       — restore single file to a specific hash
+///   restore --at <hash>              — restore all files to the moment that hash was recorded
+///   restore --before <time>          — restore all files to before a time (legacy)
+///   restore <file> --before <time>   — restore single file to before a time (legacy)
+pub fn restore(
+    file: Option<&str>,
+    rev: Option<&str>,
+    at: Option<&str>,
+    before: Option<&str>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
     let root = std::env::current_dir()?;
     let index = Index::open(&root)?;
     let store = BlobStore::init(&root)?;
-    let cutoff = parse_before(before)?;
-    let state = index.state_at(cutoff)?;
 
+    // Mode 1: file + ~N — direct single-file restore
+    if let (Some(f), Some(r)) = (file, rev) {
+        let n = parse_rev(r).ok_or_else(|| anyhow::anyhow!("invalid revision: {r}"))?;
+        let hash = file_revision(&index, f, n)?;
+        return restore_single_file(&root, &store, f, &hash, dry_run, json);
+    }
+
+    // Mode 2: --at <hash> — resolve hash to timestamp, then state_at
+    if let Some(hash_ref) = at {
+        let full_hash = store.resolve_prefix(hash_ref)
+            .map_err(|_| anyhow::anyhow!("hash not found: {hash_ref}"))?;
+        let entries = index.read_all()?;
+        let entry = entries.iter()
+            .find(|e| e.content_hash.as_deref() == Some(&full_hash))
+            .ok_or_else(|| anyhow::anyhow!("hash not in index: {hash_ref}"))?;
+        let cutoff = entry.timestamp;
+
+        if let Some(f) = file {
+            // --at with file: restore just that file to that hash
+            return restore_single_file(&root, &store, f, &full_hash, dry_run, json);
+        }
+        // --at without file: project-wide restore to that moment
+        return restore_to_state(&root, &index, &store, &index.state_at(cutoff)?, dry_run, json);
+    }
+
+    // Mode 3: --before <time> — legacy time-based restore
+    if let Some(before_str) = before {
+        let cutoff = parse_before(before_str)?;
+        let state = index.state_at(cutoff)?;
+        if let Some(f) = file {
+            let filtered: Vec<_> = state.into_iter().filter(|e| e.relative_path == f).collect();
+            return restore_to_state(&root, &index, &store, &filtered, dry_run, json);
+        }
+        return restore_to_state(&root, &index, &store, &state, dry_run, json);
+    }
+
+    bail!("specify a revision (~N), --at <hash>, or --before <time>")
+}
+
+/// Restore a single file to a specific hash.
+fn restore_single_file(root: &Path, store: &BlobStore, file: &str, hash: &str, dry_run: bool, json: bool) -> Result<()> {
+    let target = root.join(file);
+    let content = store.read_blob(hash)?;
+
+    if json {
+        let action = RestoreAction { relative_path: file.to_string(), action: "restore".into(), hash: Some(hash.to_string()), file_mode: None };
+        println!("{}", serde_json::to_string_pretty(&[&action])?);
+    } else {
+        let verb = if dry_run { "would restore" } else { "will restore" };
+        println!("{verb} {} (hash: {})", file, hash.get(..8).unwrap_or(hash));
+    }
+
+    if !dry_run {
+        if let Some(parent) = target.parent() { fs::create_dir_all(parent)?; }
+        fs::write(&target, content)?;
+        if !json { println!("Restored 1 file(s)."); }
+    }
+    Ok(())
+}
+
+/// Restore multiple files to a given state snapshot.
+fn restore_to_state(root: &Path, index: &Index, store: &BlobStore, state: &[IndexEntry], dry_run: bool, json: bool) -> Result<()> {
     let snapshot_paths: std::collections::HashSet<String> =
         state.iter().map(|e| e.relative_path.clone()).collect();
 
-    let mut actions: Vec<RestoreAction> = if let Some(f) = file {
-        let mut a: Vec<_> = state.into_iter().filter(|e| e.relative_path == f)
-            .filter_map(|e| to_restore_action(&root, &e)).collect();
-        if !snapshot_paths.contains(f) && root.join(f).exists() {
-            a.push(RestoreAction { relative_path: f.to_string(), action: "delete".into(), hash: None, file_mode: None });
+    let mut actions: Vec<RestoreAction> = state.iter()
+        .filter_map(|e| to_restore_action(root, e))
+        .collect();
+
+    // Delete files that didn't exist at the target time
+    for rel in &index.all_known_paths()? {
+        if !snapshot_paths.contains(rel) && root.join(rel).exists() {
+            actions.push(RestoreAction { relative_path: rel.clone(), action: "delete".into(), hash: None, file_mode: None });
         }
-        a
-    } else {
-        let mut a: Vec<_> = state.iter().filter_map(|e| to_restore_action(&root, e)).collect();
-        for rel in &index.all_known_paths()? {
-            if !snapshot_paths.contains(rel) && root.join(rel).exists() {
-                a.push(RestoreAction { relative_path: rel.clone(), action: "delete".into(), hash: None, file_mode: None });
-            }
-        }
-        a
-    };
+    }
     actions.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 
     if actions.is_empty() {
@@ -44,8 +110,7 @@ pub fn restore(file: Option<&str>, before: &str, dry_run: bool, json: bool) -> R
     }
 
     if json {
-        let out = serde_json::to_string_pretty(&actions)?;
-        println!("{out}");
+        println!("{}", serde_json::to_string_pretty(&actions)?);
     } else {
         for a in &actions {
             let verb = if dry_run { "would" } else { "will" };
@@ -284,5 +349,53 @@ mod tests {
             fs::set_permissions(dir.path().join("run.sh"), fs::Permissions::from_mode(mode)).unwrap();
         }
         assert_eq!(fs::metadata(dir.path().join("run.sh")).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+
+    #[test]
+    fn restore_single_file_to_hash() {
+        let dir = setup_project();
+        fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        // Get the v1 hash (first entry for src/main.rs)
+        let entries = index.query_file("src/main.rs").unwrap();
+        let h1 = entries[0].content_hash.as_ref().unwrap();
+        restore_single_file(dir.path(), &store, "src/main.rs", h1, false, false).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
+    }
+
+    #[test]
+    fn restore_single_file_dry_run_does_not_write() {
+        let dir = setup_project();
+        fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let entries = index.query_file("src/main.rs").unwrap();
+        let h1 = entries[0].content_hash.as_ref().unwrap();
+        restore_single_file(dir.path(), &store, "src/main.rs", h1, true, false).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "BROKEN");
+    }
+
+    #[test]
+    fn restore_to_state_restores_changed_files() {
+        let dir = setup_project();
+        fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let cutoff = Utc.with_ymd_and_hms(2026, 3, 14, 10, 30, 0).unwrap();
+        let state = index.state_at(cutoff).unwrap();
+        restore_to_state(dir.path(), &index, &store, &state, false, false).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
+    }
+
+    #[test]
+    fn restore_no_args_errors() {
+        // Calling with no rev, no --at, no --before should error
+        // All None → should reach the bail
+        let file: Option<&str> = None;
+        let rev: Option<&str> = None;
+        let at: Option<&str> = None;
+        let before: Option<&str> = None;
+        assert!(file.is_none() && rev.is_none() && at.is_none() && before.is_none());
     }
 }

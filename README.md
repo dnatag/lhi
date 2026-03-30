@@ -109,9 +109,13 @@ When git branch tracking is available, each entry shows the branch it was record
 
 Print the content of a stored file version by its SHA-256 hash (from `lhi log` output).
 
+When stdout is a terminal, output is syntax-highlighted with line numbers and a grid border (powered by [bat](https://github.com/sharkdp/bat)). The language is auto-detected from the filename in the index. When piped, raw content is emitted for composability.
+
 ### `lhi diff <HASH1> <HASH2>`
 
-Show a unified diff between two stored file versions. Output is colorized when stdout is a terminal.
+Show a unified diff between two stored file versions.
+
+When stdout is a terminal, the diff is rendered with syntax highlighting. If [delta](https://github.com/dandavison/delta) is installed, it is used automatically for rich side-by-side output. Otherwise, falls back to bat's Diff syntax highlighting. When piped, standard unified diff format is emitted.
 
 ### `lhi search <QUERY>`
 
@@ -122,7 +126,7 @@ Options:
   --file <PATH>  Search only versions of this file
 ```
 
-Searches each unique blob once, showing matching lines with file path, timestamp, and line numbers.
+Searches each unique blob once. When stdout is a terminal, matching lines are shown with syntax-highlighted context (2 lines above and below), line numbers, and highlighted match lines. When piped, plain text output is emitted.
 
 ### `lhi info`
 
@@ -203,9 +207,8 @@ src/
 └── bin/lhi/
     ├── main.rs         Entry point
     └── cli.rs          Clap CLI definition
-docs/
-├── reviewsmith-report.md   Code review report
-└── developer-guide.md      Developer walkthrough for activate module
+doc/
+└── src/                mdbook documentation source
 ```
 
 ## License

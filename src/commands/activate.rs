@@ -75,10 +75,16 @@ _lhi_hook() {
         kill -0 "$pid" 2>/dev/null && return 0
         _lhi_remove "$root"
     }
-    lhi watch "$root" >/dev/null 2>&1 &
+    lhi watch "$root" >/dev/null 2>>"$HOME/.lhi-watch.log" &
+    local wpid=$!
+    disown "$wpid" 2>/dev/null
+    sleep 0.1
+    if ! kill -0 "$wpid" 2>/dev/null; then
+        printf 'lhi: watcher failed to start for %s (see ~/.lhi-watch.log)\n' "$root" >&2
+        return 1
+    fi
     _LHI_WATCHERS="${_LHI_WATCHERS:+${_LHI_WATCHERS}
-}${root}	$!"
-    disown "$!" 2>/dev/null
+}${root}	$wpid"
 }
 
 _lhi_deactivate() {
@@ -141,9 +147,15 @@ _lhi_hook() {
         kill -0 "${_LHI_PIDS[$root]}" 2>/dev/null && return 0
         unset '_LHI_PIDS['"$root"']'
     fi
-    lhi watch "$root" >/dev/null 2>&1 &
-    _LHI_PIDS[$root]=$!
-    disown "$!" 2>/dev/null
+    lhi watch "$root" >/dev/null 2>>"$HOME/.lhi-watch.log" &
+    local wpid=$!
+    disown "$wpid" 2>/dev/null
+    sleep 0.1
+    if ! kill -0 "$wpid" 2>/dev/null; then
+        printf 'lhi: watcher failed to start for %s (see ~/.lhi-watch.log)\n' "$root" >&2
+        return 1
+    fi
+    _LHI_PIDS[$root]=$wpid
 }
 
 _lhi_deactivate() {
