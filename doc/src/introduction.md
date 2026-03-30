@@ -31,6 +31,7 @@ src/
 │   ├── cat.rs          lhi cat (syntax-highlighted file viewing)
 │   ├── diff.rs         lhi diff (delta/bat-powered diff)
 │   ├── info.rs         lhi info
+│   ├── init.rs         lhi init
 │   ├── log.rs          lhi log
 │   ├── search.rs       lhi search (highlighted context matches)
 │   ├── compact.rs      lhi compact

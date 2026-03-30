@@ -8,45 +8,44 @@ cargo install --path .
 
 ## Quick start
 
-Add this to your `~/.bashrc` or `~/.zshrc`:
-
 ```bash
+# Initialize a project
+cd ~/my-project
+lhi init
+
+# Add this to your ~/.bashrc or ~/.zshrc for automatic watching
 eval "$(lhi activate)"
 ```
 
-That's it. Now whenever you `cd` into a project that has a `.lhi/` directory, a watcher starts automatically in the background. Multiple projects can be watched concurrently — each gets its own watcher process. All watchers are cleaned up when the shell exits.
-
-To initialize a new project, just run `lhi watch` once (it creates `.lhi/` on first run), then let the shell hook handle it from there.
+That's it. `lhi init` creates the `.lhi/` directory and adds it to `.gitignore`. The shell hook automatically starts a watcher whenever you `cd` into a project with `.lhi/`. Multiple projects can be watched concurrently — each gets its own watcher process. All watchers are cleaned up when the shell exits.
 
 ```bash
 # Check what changed
-lhi log
-lhi log src/main.rs
-lhi log --since 30m
-lhi log --branch main
+lhi log src/main.rs          # shows ~1, ~2, ~3... revision numbers
 
 # View an old version
-lhi cat <hash>
+lhi cat src/main.rs           # latest stored version
+lhi cat src/main.rs ~3        # 3rd most recent
+lhi cat a1b2c3d4              # by short hash prefix
 
-# Compare two versions
-lhi diff <hash1> <hash2>
+# Compare versions
+lhi diff src/main.rs          # latest stored vs current disk
+lhi diff src/main.rs ~5       # revision ~5 vs current disk
+lhi diff src/main.rs ~3 ~1    # compare two revisions
 
 # Search through stored file versions
 lhi search "fn main"
 lhi search "TODO" --file src/lib.rs
 
-# Check storage usage
-lhi info
+# Restore files
+lhi restore src/main.rs ~5           # restore single file to revision
+lhi restore --at a1b2c3d4            # restore project to that moment
+lhi restore --at a1b2c3d4 --dry-run  # preview first
 
-# Restore files to 5 minutes ago
-lhi restore --before 5m --dry-run
-lhi restore --before 5m
-
-# Take a manual snapshot
-lhi snapshot --label "before refactor"
-
-# Shrink the index
-lhi compact
+# Other commands
+lhi info                              # storage statistics
+lhi snapshot --label "before refactor"  # manual snapshot
+lhi compact                           # shrink the index
 ```
 
 ## Logging
@@ -59,3 +58,5 @@ RUST_LOG=lhi=trace lhi watch    # very verbose
 ```
 
 Default level is `info` (warnings and errors only).
+
+The shell hook logs watcher stderr to `~/.lhi-watch.log` for troubleshooting.

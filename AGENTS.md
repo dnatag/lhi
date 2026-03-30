@@ -14,8 +14,8 @@ bin/lhi  →  commands  →  core (index, store, event)
                 └──►  watcher  ──────┘
 ```
 
-- **core/** — Data layer. `Index` manages the JSONL index, `BlobStore` handles content-addressed blobs (zstd-compressed, backward-compatible with uncompressed), `event` defines serializable types. Core types return `io::Result`.
-- **commands/** — One file per CLI subcommand. All return `anyhow::Result`. Shared time-parsing utilities in `mod.rs`. `activate.rs` is special: it generates shell scripts (one per supported shell) rather than performing direct actions. `cat.rs`, `diff.rs`, and `search.rs` use `bat` as a library for syntax-highlighted terminal output, with `diff.rs` also piping to `delta` if available.
+- **core/** — Data layer. `Index` manages the JSONL index, `BlobStore` handles content-addressed blobs (zstd-compressed, backward-compatible with uncompressed), `event` defines serializable types. Core types return `io::Result`. `BlobStore::resolve_prefix` resolves short hash prefixes by scanning the blobs directory.
+- **commands/** — One file per CLI subcommand. All return `anyhow::Result`. Shared time-parsing utilities and revision helpers (`file_revision`, `parse_rev`) in `mod.rs`. `activate.rs` is special: it generates shell scripts (one per supported shell) rather than performing direct actions. `cat.rs`, `diff.rs`, and `search.rs` use `bat` as a library for syntax-highlighted terminal output, with `diff.rs` also piping to `delta` if available.
 - **watcher/** — Real-time filesystem monitoring with `notify` crate. Debounces events (100ms), respects `.gitignore`, stores blobs and index entries. Captures git branch at startup.
 - **util.rs** — Shared `hex_sha256`, `get_file_mode`, and `current_git_branch` used by core, commands, and watcher.
 - **bin/lhi/** — Thin CLI layer using `clap`. `main.rs` initializes tracing, `cli.rs` dispatches to commands.
@@ -28,6 +28,7 @@ bin/lhi  →  commands  →  core (index, store, event)
 - Blob writes are atomic (temp file + rename), zstd-compressed. Reads detect magic bytes for backward compat with old uncompressed blobs.
 - Index appends are not atomic (append mode).
 - Tests are inline (`#[cfg(test)] mod tests`) in each file.
+- Revision references: `~N` means Nth most recent version of a file (`~1` = latest). Parsed by `parse_rev()`, resolved by `file_revision()` in `commands/mod.rs`.
 
 ## Important constraints
 
@@ -35,9 +36,10 @@ bin/lhi  →  commands  →  core (index, store, event)
 - **Blob compatibility:** Old uncompressed blobs are read transparently (magic byte detection). New blobs are always zstd-compressed.
 - **No file locking:** The index has no concurrency protection. Running `lhi watch` and `lhi snapshot` simultaneously could interleave writes.
 - **Platform-specific code:** `get_file_mode` uses `#[cfg(unix)]`. Restore permission handling is Unix-only.
-- **`.lhi` filtering:** `baseline_snapshot` and `snapshot` command skip `.lhi` via string prefix check. The watcher relies on `.gitignore` containing `.lhi/`.
+- **`.lhi` filtering:** The watcher's `is_ignored()` rejects any path containing a `.lhi` component at any nesting depth (not dependent on `.gitignore`). `baseline_snapshot` also skips paths containing `.lhi` at any level. This prevents double-recording in nested project setups.
 - **Git branch:** Captured once at watcher startup and snapshot time, not per-event. Stored as `Option<String>` — `None` when not in a git repo.
 - **Shell hook portability:** `activate.rs` emits separate scripts for bash and zsh. Bash script avoids associative arrays (bash 3.2 on macOS lacks them) and uses a newline-delimited string instead. Zsh script uses native `typeset -A` with zsh-specific key iteration (`${(k)arr[@]}`) and existence checks (`${+arr[key]}`). These syntaxes are not interchangeable — do not attempt a single "portable" script for both shells.
+- **Shell hook error handling:** Watcher stderr is logged to `~/.lhi-watch.log`. After launching a watcher, the hook sleeps briefly and checks `kill -0` to detect immediate crashes, warning the user if the watcher failed to start.
 - **Terminal output:** `cat`, `diff`, and `search` use `bat` as a library (`PrettyPrinter`) for syntax-highlighted output when stdout is a terminal. When piped, they emit plain/raw output for composability. `diff` additionally tries piping to `delta` CLI if installed before falling back to bat. The `bat` dependency uses `default-features = false` with `regex-fancy` (pure Rust, no C deps). Filenames for syntax auto-detection are resolved from the index via hash lookup.
 
 ## Running tests

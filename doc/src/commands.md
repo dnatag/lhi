@@ -1,5 +1,9 @@
 # Commands
 
+## `lhi init [PATH]`
+
+Initialize a `.lhi/` directory for a project. Creates `.lhi/blobs/` and adds `.lhi/` to `.gitignore` if one exists. Safe to run multiple times (idempotent).
+
 ## `lhi activate`
 
 Prints a shell hook script to stdout. Designed to be `eval`'d in your shell rc file:
@@ -14,6 +18,7 @@ The hook:
 - Starts `lhi watch` in the background for each new project entered
 - Tracks multiple concurrent watchers (one per project root)
 - Re-launches a watcher if its process dies
+- Logs watcher errors to `~/.lhi-watch.log` and warns on failed launches
 - Kills all watchers on shell exit (`EXIT` trap)
 
 Shell-specific implementations are emitted for portability:
@@ -39,7 +44,7 @@ On first run, captures a baseline snapshot of all existing files. Respects `.git
 
 ## `lhi log [FILE]`
 
-Show change history.
+Show change history. When filtered to a single file, shows `~N` revision numbers (`~1` = newest).
 
 ```
 Options:
@@ -50,15 +55,28 @@ Options:
 
 When git branch tracking is available, each entry shows the branch it was recorded on.
 
-## `lhi cat <HASH>`
+## `lhi cat <TARGET> [~N]`
 
-Print the content of a stored file version by its SHA-256 hash (from `lhi log` output).
+Print the content of a stored file version. Accepts a hash (or short prefix), a file path (shows latest), or a file path with `~N` revision.
+
+```bash
+lhi cat a1b2c3d4          # by hash prefix
+lhi cat src/main.rs        # latest version
+lhi cat src/main.rs ~3     # 3rd most recent
+```
 
 When stdout is a terminal, output is syntax-highlighted with line numbers and a grid border (powered by [bat](https://github.com/sharkdp/bat)). The language is auto-detected from the filename in the index. When piped, raw content is emitted for composability.
 
-## `lhi diff <HASH1> <HASH2>`
+## `lhi diff <ARG1> [ARG2] [ARG3]`
 
-Show a unified diff between two stored file versions.
+Show a unified diff between file versions. Supports multiple forms:
+
+```bash
+lhi diff a1b2c3d4 e5f6a7b8   # two hash prefixes
+lhi diff src/main.rs ~3 ~1    # file with two revisions
+lhi diff src/main.rs ~5       # revision vs current file on disk
+lhi diff src/main.rs          # latest stored vs current disk
+```
 
 When stdout is a terminal, the diff is rendered with syntax highlighting. If [delta](https://github.com/dandavison/delta) is installed, it is used automatically for rich side-by-side output. Otherwise, falls back to bat's Diff syntax highlighting. When piped, standard unified diff format is emitted.
 
@@ -77,13 +95,21 @@ Searches each unique blob once. When stdout is a terminal, matching lines are sh
 
 Show storage statistics: index entries, files tracked, blob count, blob size, and total `.lhi/` disk usage.
 
-## `lhi restore [FILE] --before <TIME>`
+## `lhi restore [FILE] [~N]`
 
-Restore files to their state before a point in time.
+Restore files to a previous state. Supports multiple modes:
+
+```bash
+lhi restore src/main.rs ~5           # single file to revision
+lhi restore src/main.rs --at a1b2    # single file to specific hash
+lhi restore --at a1b2c3d4            # all files to that moment
+lhi restore --before 5m              # all files to 5 minutes ago
+```
 
 ```
 Options:
-  --before <TIME>  Required. Accepts: 5m, 1h, 14:30, ISO 8601
+  --at <HASH>    Restore to the moment a specific hash was recorded
+  --before <TIME>  Restore to before a time (5m, 1h, 14:30, ISO 8601)
   --dry-run        Preview without making changes
   --json           Output as JSON
 ```

@@ -12,7 +12,7 @@
 
 ## Blob store
 
-Files are stored by their SHA-256 hash. Identical content is automatically deduplicated. Blobs are zstd-compressed on write; old uncompressed blobs are read transparently (magic byte detection). Writes are atomic (temp file + rename).
+Files are stored by their SHA-256 hash. Identical content is automatically deduplicated. Blobs are zstd-compressed on write; old uncompressed blobs are read transparently (magic byte detection). Writes are atomic (temp file + rename). Short hash prefixes are resolved by scanning the blobs directory.
 
 ## Index
 
@@ -20,7 +20,7 @@ JSONL format — each line records timestamp, event type, file path, content has
 
 ## Watcher
 
-Uses OS-native filesystem notifications (`notify` crate) with 100ms debouncing. On first run, captures a baseline snapshot of all existing files. Respects `.gitignore`. Files over 10MB are skipped. Symlinks are ignored.
+Uses OS-native filesystem notifications (`notify` crate) with 100ms debouncing. On first run, captures a baseline snapshot of all existing files. Respects `.gitignore`. Ignores `.lhi/` directories at any nesting depth. Files over 10MB are skipped. Symlinks are ignored.
 
 ## Git integration
 
