@@ -23,12 +23,17 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
 
     for entry in entries.iter().rev() {
         if let Some(f) = file
-            && entry.relative_path != f { continue; }
+            && entry.relative_path != f
+        {
+            continue;
+        }
         let hash = match &entry.content_hash {
             Some(h) => h,
             None => continue,
         };
-        if !seen_hashes.insert(hash.clone()) { continue; }
+        if !seen_hashes.insert(hash.clone()) {
+            continue;
+        }
 
         let blob = match store.read_blob(hash) {
             Ok(b) => b,
@@ -39,14 +44,21 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
             Err(_) => continue,
         };
 
-        let matching_lines: Vec<usize> = text.lines().enumerate()
+        let matching_lines: Vec<usize> = text
+            .lines()
+            .enumerate()
             .filter(|(_, line)| line.to_lowercase().contains(&query_lower))
             .map(|(i, _)| i + 1) // 1-indexed
             .collect();
 
-        if matching_lines.is_empty() { continue; }
+        if matching_lines.is_empty() {
+            continue;
+        }
 
-        let ts = entry.timestamp.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
+        let ts = entry
+            .timestamp
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S");
         let short_hash = hash.get(..8).unwrap_or(hash);
         matches += matching_lines.len();
 
@@ -54,9 +66,10 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
             println!("--- {} ({short_hash}) {ts}", entry.relative_path);
             // Build line ranges: 2 lines of context around each match
             let total_lines = text.lines().count();
-            let ranges: Vec<LineRange> = matching_lines.iter().map(|&ln| {
-                LineRange::new(ln.saturating_sub(2).max(1), (ln + 2).min(total_lines))
-            }).collect();
+            let ranges: Vec<LineRange> = matching_lines
+                .iter()
+                .map(|&ln| LineRange::new(ln.saturating_sub(2).max(1), (ln + 2).min(total_lines)))
+                .collect();
 
             let mut pp = PrettyPrinter::new();
             pp.input(bat::Input::from_bytes(blob.as_slice()).name(&entry.relative_path))
@@ -85,11 +98,17 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
     use crate::index::{Index, IndexEntry};
     use crate::store::BlobStore;
+    use chrono::{TimeZone, Utc};
 
-    fn make_entry(dir: &std::path::Path, rel: &str, content: &[u8], ts: chrono::DateTime<Utc>, store: &BlobStore) -> IndexEntry {
+    fn make_entry(
+        dir: &std::path::Path,
+        rel: &str,
+        content: &[u8],
+        ts: chrono::DateTime<Utc>,
+        store: &BlobStore,
+    ) -> IndexEntry {
         let hash = store.store_blob(content).unwrap();
         IndexEntry {
             timestamp: ts,
@@ -98,7 +117,9 @@ mod tests {
             relative_path: rel.into(),
             content_hash: Some(hash),
             size_bytes: Some(content.len() as u64),
-            label: None, file_mode: None, git_branch: None,
+            label: None,
+            file_mode: None,
+            git_branch: None,
         }
     }
 
@@ -108,15 +129,33 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let index = Index::open(dir.path()).unwrap();
         let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", b"fn main() {}\nfn helper() {}", ts, &store)).unwrap();
-        index.append(&make_entry(dir.path(), "b.rs", b"struct Foo;\n", ts, &store)).unwrap();
+        index
+            .append(&make_entry(
+                dir.path(),
+                "a.rs",
+                b"fn main() {}\nfn helper() {}",
+                ts,
+                &store,
+            ))
+            .unwrap();
+        index
+            .append(&make_entry(
+                dir.path(),
+                "b.rs",
+                b"struct Foo;\n",
+                ts,
+                &store,
+            ))
+            .unwrap();
 
         let entries = index.read_all().unwrap();
         let mut seen = std::collections::HashSet::new();
         let mut matched_files = Vec::new();
         for entry in entries.iter().rev() {
             let hash = entry.content_hash.as_ref().unwrap();
-            if !seen.insert(hash.clone()) { continue; }
+            if !seen.insert(hash.clone()) {
+                continue;
+            }
             let blob = store.read_blob(hash).unwrap();
             let text = std::str::from_utf8(&blob).unwrap();
             if text.to_lowercase().contains("fn main") {
@@ -132,7 +171,15 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let index = Index::open(dir.path()).unwrap();
         let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", b"TODO: fix this", ts, &store)).unwrap();
+        index
+            .append(&make_entry(
+                dir.path(),
+                "a.rs",
+                b"TODO: fix this",
+                ts,
+                &store,
+            ))
+            .unwrap();
 
         let entries = index.read_all().unwrap();
         let hash = entries[0].content_hash.as_ref().unwrap();
@@ -149,15 +196,21 @@ mod tests {
         let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
         let t2 = Utc.with_ymd_and_hms(2026, 3, 14, 11, 0, 0).unwrap();
         let content = b"fn search_me() {}";
-        index.append(&make_entry(dir.path(), "a.rs", content, t1, &store)).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", content, t2, &store)).unwrap();
+        index
+            .append(&make_entry(dir.path(), "a.rs", content, t1, &store))
+            .unwrap();
+        index
+            .append(&make_entry(dir.path(), "a.rs", content, t2, &store))
+            .unwrap();
 
         let entries = index.read_all().unwrap();
         let mut seen = std::collections::HashSet::new();
         let mut search_count = 0;
         for entry in entries.iter().rev() {
             let hash = entry.content_hash.as_ref().unwrap();
-            if !seen.insert(hash.clone()) { continue; }
+            if !seen.insert(hash.clone()) {
+                continue;
+            }
             search_count += 1;
         }
         assert_eq!(search_count, 1, "same hash should only be searched once");
@@ -169,12 +222,29 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let index = Index::open(dir.path()).unwrap();
         let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", b"fn target() {}", ts, &store)).unwrap();
-        index.append(&make_entry(dir.path(), "b.rs", b"fn target() {}", ts, &store)).unwrap();
+        index
+            .append(&make_entry(
+                dir.path(),
+                "a.rs",
+                b"fn target() {}",
+                ts,
+                &store,
+            ))
+            .unwrap();
+        index
+            .append(&make_entry(
+                dir.path(),
+                "b.rs",
+                b"fn target() {}",
+                ts,
+                &store,
+            ))
+            .unwrap();
 
         let file_filter = Some("a.rs");
         let entries = index.read_all().unwrap();
-        let filtered: Vec<_> = entries.iter()
+        let filtered: Vec<_> = entries
+            .iter()
             .filter(|e| file_filter.is_none() || e.relative_path == file_filter.unwrap())
             .collect();
         assert_eq!(filtered.len(), 1);
@@ -187,14 +257,19 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let hash = store.store_blob(&[0xFF, 0xFE, 0x00, 0x01]).unwrap();
         let blob = store.read_blob(&hash).unwrap();
-        assert!(std::str::from_utf8(&blob).is_err(), "binary content should fail utf8 parse");
+        assert!(
+            std::str::from_utf8(&blob).is_err(),
+            "binary content should fail utf8 parse"
+        );
     }
 
     #[test]
     fn search_matching_lines_are_one_indexed() {
         let text = "line one\nline two\nline three\n";
         let query = "two";
-        let matching: Vec<usize> = text.lines().enumerate()
+        let matching: Vec<usize> = text
+            .lines()
+            .enumerate()
             .filter(|(_, line)| line.to_lowercase().contains(query))
             .map(|(i, _)| i + 1)
             .collect();
@@ -205,7 +280,9 @@ mod tests {
     fn search_multiple_matches_in_single_blob() {
         let text = "fn foo() {}\nfn bar() {}\nstruct Baz;\nfn qux() {}\n";
         let query = "fn";
-        let matching: Vec<usize> = text.lines().enumerate()
+        let matching: Vec<usize> = text
+            .lines()
+            .enumerate()
             .filter(|(_, line)| line.to_lowercase().contains(query))
             .map(|(i, _)| i + 1)
             .collect();

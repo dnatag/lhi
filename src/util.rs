@@ -30,6 +30,10 @@ pub fn current_git_branch(root: &Path) -> Option<String> {
         .and_then(|o| {
             let s = String::from_utf8(o.stdout).ok()?;
             let trimmed = s.trim();
-            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
         })
 }

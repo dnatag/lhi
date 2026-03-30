@@ -1,7 +1,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use bat::PrettyPrinter;
 use similar::TextDiff;
 
@@ -23,7 +23,8 @@ pub fn diff(arg1: &str, arg2: Option<&str>, arg3: Option<&str>) -> Result<()> {
     let (text1, text2, filename) = resolve_diff_args(&store, &index, &root, arg1, arg2, arg3)?;
 
     let diff = TextDiff::from_lines(text1.as_str(), text2.as_str());
-    let diff_text = diff.unified_diff()
+    let diff_text = diff
+        .unified_diff()
         .context_radius(3)
         .header(&format!("a/{filename}"), &format!("b/{filename}"))
         .to_string();
@@ -38,10 +39,7 @@ pub fn diff(arg1: &str, arg2: Option<&str>, arg3: Option<&str>) -> Result<()> {
     }
 
     // Try piping to delta first
-    if let Ok(mut child) = Command::new("delta")
-        .stdin(Stdio::piped())
-        .spawn()
-    {
+    if let Ok(mut child) = Command::new("delta").stdin(Stdio::piped()).spawn() {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(diff_text.as_bytes());
         }
@@ -91,11 +89,19 @@ fn resolve_diff_args(
                 // two hashes
                 let h1 = store.resolve_prefix(arg1)?;
                 let h2 = store.resolve_prefix(a2)?;
-                let filename = index.read_all().ok()
-                    .and_then(|entries| entries.into_iter().rev()
-                        .find(|e| e.content_hash.as_deref() == Some(&h2)
-                            || e.content_hash.as_deref() == Some(&h1))
-                        .map(|e| e.relative_path))
+                let filename = index
+                    .read_all()
+                    .ok()
+                    .and_then(|entries| {
+                        entries
+                            .into_iter()
+                            .rev()
+                            .find(|e| {
+                                e.content_hash.as_deref() == Some(&h2)
+                                    || e.content_hash.as_deref() == Some(&h1)
+                            })
+                            .map(|e| e.relative_path)
+                    })
                     .unwrap_or_else(|| "file".into());
                 let t1 = String::from_utf8_lossy(&store.read_blob(&h1)?).into_owned();
                 let t2 = String::from_utf8_lossy(&store.read_blob(&h2)?).into_owned();
@@ -119,10 +125,10 @@ fn resolve_diff_args(
 
 #[cfg(test)]
 mod tests {
-    use similar::{ChangeTag, TextDiff};
     use crate::index::{Index, IndexEntry};
     use crate::store::BlobStore;
     use chrono::{TimeZone, Utc};
+    use similar::{ChangeTag, TextDiff};
 
     #[test]
     fn diff_identical_blobs_produces_no_changes() {
@@ -134,15 +140,21 @@ mod tests {
         let t1 = String::from_utf8_lossy(&b1);
         let t2 = String::from_utf8_lossy(&b2);
         let diff = TextDiff::from_lines(t1.as_ref(), t2.as_ref());
-        assert_eq!(diff.unified_diff().context_radius(3).iter_hunks().count(), 0);
+        assert_eq!(
+            diff.unified_diff().context_radius(3).iter_hunks().count(),
+            0
+        );
     }
 
     #[test]
     fn diff_identical_blobs_produces_empty_unified_text() {
         let t1 = "same\n";
         let diff = TextDiff::from_lines(t1, t1);
-        let text = diff.unified_diff().context_radius(3)
-            .header("a/file", "b/file").to_string();
+        let text = diff
+            .unified_diff()
+            .context_radius(3)
+            .header("a/file", "b/file")
+            .to_string();
         assert!(text.is_empty());
     }
 
@@ -158,15 +170,26 @@ mod tests {
         let t2 = String::from_utf8_lossy(&b2);
         let diff = TextDiff::from_lines(t1.as_ref(), t2.as_ref());
         let changes: Vec<_> = diff.iter_all_changes().collect();
-        assert!(changes.iter().any(|c| c.tag() == ChangeTag::Delete && c.value().contains("line2")));
-        assert!(changes.iter().any(|c| c.tag() == ChangeTag::Insert && c.value().contains("changed")));
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.tag() == ChangeTag::Delete && c.value().contains("line2"))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.tag() == ChangeTag::Insert && c.value().contains("changed"))
+        );
     }
 
     #[test]
     fn diff_unified_text_contains_headers() {
         let diff = TextDiff::from_lines("old\n", "new\n");
-        let text = diff.unified_diff().context_radius(3)
-            .header("a/src/main.rs", "b/src/main.rs").to_string();
+        let text = diff
+            .unified_diff()
+            .context_radius(3)
+            .header("a/src/main.rs", "b/src/main.rs")
+            .to_string();
         assert!(text.contains("--- a/src/main.rs"));
         assert!(text.contains("+++ b/src/main.rs"));
     }
@@ -178,15 +201,25 @@ mod tests {
         let index = Index::open(dir.path()).unwrap();
         let hash = store.store_blob(b"content").unwrap();
         let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
-        index.append(&IndexEntry {
-            timestamp: ts, event_type: "modify".into(),
-            path: dir.path().join("lib.rs").display().to_string(),
-            relative_path: "lib.rs".into(),
-            content_hash: Some(hash.clone()),
-            size_bytes: Some(7), label: None, file_mode: None, git_branch: None,
-        }).unwrap();
+        index
+            .append(&IndexEntry {
+                timestamp: ts,
+                event_type: "modify".into(),
+                path: dir.path().join("lib.rs").display().to_string(),
+                relative_path: "lib.rs".into(),
+                content_hash: Some(hash.clone()),
+                size_bytes: Some(7),
+                label: None,
+                file_mode: None,
+                git_branch: None,
+            })
+            .unwrap();
 
-        let filename = index.read_all().unwrap().into_iter().rev()
+        let filename = index
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .rev()
             .find(|e| e.content_hash.as_deref() == Some(&hash))
             .map(|e| e.relative_path);
         assert_eq!(filename.as_deref(), Some("lib.rs"));
@@ -198,7 +231,11 @@ mod tests {
         let _store = BlobStore::init(dir.path()).unwrap();
         let index = Index::open(dir.path()).unwrap();
 
-        let filename = index.read_all().unwrap().into_iter().rev()
+        let filename = index
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .rev()
             .find(|e| e.content_hash.as_deref() == Some("nonexistent"))
             .map(|e| e.relative_path)
             .unwrap_or_else(|| "file".into());
@@ -212,14 +249,24 @@ mod tests {
         assert!(store.read_blob("nonexistent").is_err());
     }
 
-    fn make_entry(dir: &std::path::Path, rel: &str, content: &[u8], ts: chrono::DateTime<chrono::Utc>, store: &BlobStore) -> IndexEntry {
+    fn make_entry(
+        dir: &std::path::Path,
+        rel: &str,
+        content: &[u8],
+        ts: chrono::DateTime<chrono::Utc>,
+        store: &BlobStore,
+    ) -> IndexEntry {
         let hash = store.store_blob(content).unwrap();
         IndexEntry {
-            timestamp: ts, event_type: "modify".into(),
+            timestamp: ts,
+            event_type: "modify".into(),
             path: dir.join(rel).display().to_string(),
-            relative_path: rel.into(), content_hash: Some(hash),
+            relative_path: rel.into(),
+            content_hash: Some(hash),
             size_bytes: Some(content.len() as u64),
-            label: None, file_mode: None, git_branch: None,
+            label: None,
+            file_mode: None,
+            git_branch: None,
         }
     }
 
@@ -236,7 +283,9 @@ mod tests {
         index.append(&e1).unwrap();
         index.append(&e2).unwrap();
 
-        let (t1, t2, _) = super::resolve_diff_args(&store, &index, dir.path(), &h1[..8], Some(&h2[..8]), None).unwrap();
+        let (t1, t2, _) =
+            super::resolve_diff_args(&store, &index, dir.path(), &h1[..8], Some(&h2[..8]), None)
+                .unwrap();
         assert_eq!(t1, "old\n");
         assert_eq!(t2, "new\n");
     }
@@ -248,10 +297,16 @@ mod tests {
         let index = Index::open(dir.path()).unwrap();
         let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
         let t2 = Utc.with_ymd_and_hms(2026, 3, 14, 11, 0, 0).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", b"v1\n", t1, &store)).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", b"v2\n", t2, &store)).unwrap();
+        index
+            .append(&make_entry(dir.path(), "a.rs", b"v1\n", t1, &store))
+            .unwrap();
+        index
+            .append(&make_entry(dir.path(), "a.rs", b"v2\n", t2, &store))
+            .unwrap();
 
-        let (text1, text2, name) = super::resolve_diff_args(&store, &index, dir.path(), "a.rs", Some("~2"), Some("~1")).unwrap();
+        let (text1, text2, name) =
+            super::resolve_diff_args(&store, &index, dir.path(), "a.rs", Some("~2"), Some("~1"))
+                .unwrap();
         assert_eq!(text1, "v1\n");
         assert_eq!(text2, "v2\n");
         assert_eq!(name, "a.rs");
@@ -263,10 +318,13 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let index = Index::open(dir.path()).unwrap();
         let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", b"stored\n", ts, &store)).unwrap();
+        index
+            .append(&make_entry(dir.path(), "a.rs", b"stored\n", ts, &store))
+            .unwrap();
         std::fs::write(dir.path().join("a.rs"), "on disk\n").unwrap();
 
-        let (text1, text2, _) = super::resolve_diff_args(&store, &index, dir.path(), "a.rs", Some("~1"), None).unwrap();
+        let (text1, text2, _) =
+            super::resolve_diff_args(&store, &index, dir.path(), "a.rs", Some("~1"), None).unwrap();
         assert_eq!(text1, "stored\n");
         assert_eq!(text2, "on disk\n");
     }
@@ -277,10 +335,13 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let index = Index::open(dir.path()).unwrap();
         let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
-        index.append(&make_entry(dir.path(), "a.rs", b"stored\n", ts, &store)).unwrap();
+        index
+            .append(&make_entry(dir.path(), "a.rs", b"stored\n", ts, &store))
+            .unwrap();
         std::fs::write(dir.path().join("a.rs"), "changed\n").unwrap();
 
-        let (text1, text2, _) = super::resolve_diff_args(&store, &index, dir.path(), "a.rs", None, None).unwrap();
+        let (text1, text2, _) =
+            super::resolve_diff_args(&store, &index, dir.path(), "a.rs", None, None).unwrap();
         assert_eq!(text1, "stored\n");
         assert_eq!(text2, "changed\n");
     }

@@ -33,7 +33,12 @@ pub fn cat(target: &str, rev: Option<&str>) -> Result<()> {
 }
 
 /// Resolves target + optional rev to (full_hash, filename).
-fn resolve_target(store: &BlobStore, index: &Index, target: &str, rev: Option<&str>) -> Result<(String, String)> {
+fn resolve_target(
+    store: &BlobStore,
+    index: &Index,
+    target: &str,
+    rev: Option<&str>,
+) -> Result<(String, String)> {
     // If rev is provided, target must be a file path
     if let Some(r) = rev {
         let n = parse_rev(r).ok_or_else(|| anyhow::anyhow!("invalid revision: {r}"))?;
@@ -41,15 +46,22 @@ fn resolve_target(store: &BlobStore, index: &Index, target: &str, rev: Option<&s
         return Ok((hash, target.to_string()));
     }
     // Try as hash/prefix first
-    if target.bytes().all(|b| b.is_ascii_hexdigit()) && !target.is_empty() {
-        if let Ok(hash) = store.resolve_prefix(target) {
-            let filename = index.read_all().ok()
-                .and_then(|entries| entries.into_iter().rev()
+    if target.bytes().all(|b| b.is_ascii_hexdigit())
+        && !target.is_empty()
+        && let Ok(hash) = store.resolve_prefix(target)
+    {
+        let filename = index
+            .read_all()
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .into_iter()
+                    .rev()
                     .find(|e| e.content_hash.as_deref() == Some(&hash))
-                    .map(|e| e.relative_path))
-                .unwrap_or_default();
-            return Ok((hash, filename));
-        }
+                    .map(|e| e.relative_path)
+            })
+            .unwrap_or_default();
+        return Ok((hash, filename));
     }
     // Try as file path (implicit ~1)
     let hash = file_revision(index, target, 1)?;
@@ -62,7 +74,12 @@ mod tests {
     use crate::store::BlobStore;
     use chrono::{TimeZone, Utc};
 
-    fn make_entry(dir: &std::path::Path, rel: &str, content: &[u8], store: &BlobStore) -> IndexEntry {
+    fn make_entry(
+        dir: &std::path::Path,
+        rel: &str,
+        content: &[u8],
+        store: &BlobStore,
+    ) -> IndexEntry {
         let hash = store.store_blob(content).unwrap();
         IndexEntry {
             timestamp: Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap(),
@@ -71,7 +88,9 @@ mod tests {
             relative_path: rel.into(),
             content_hash: Some(hash),
             size_bytes: Some(content.len() as u64),
-            label: None, file_mode: None, git_branch: None,
+            label: None,
+            file_mode: None,
+            git_branch: None,
         }
     }
 
@@ -109,7 +128,11 @@ mod tests {
         index.append(&entry).unwrap();
 
         // Simulate the filename resolution logic from cat()
-        let filename = index.read_all().unwrap().into_iter().rev()
+        let filename = index
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .rev()
             .find(|e| e.content_hash.as_deref() == Some(&hash))
             .map(|e| e.relative_path);
         assert_eq!(filename.as_deref(), Some("src/main.rs"));
@@ -122,7 +145,11 @@ mod tests {
         let hash = store.store_blob(b"orphan blob").unwrap();
         let index = Index::open(dir.path()).unwrap();
 
-        let filename = index.read_all().unwrap().into_iter().rev()
+        let filename = index
+            .read_all()
+            .unwrap()
+            .into_iter()
+            .rev()
             .find(|e| e.content_hash.as_deref() == Some(&hash))
             .map(|e| e.relative_path)
             .unwrap_or_default();

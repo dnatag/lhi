@@ -20,7 +20,10 @@ pub fn init(path: &Path) -> Result<()> {
     let gitignore = root.join(".gitignore");
     if gitignore.exists() {
         let content = fs::read_to_string(&gitignore)?;
-        if !content.lines().any(|l| l.trim() == ".lhi/" || l.trim() == ".lhi") {
+        if !content
+            .lines()
+            .any(|l| l.trim() == ".lhi/" || l.trim() == ".lhi")
+        {
             use std::io::Write;
             let mut f = fs::OpenOptions::new().append(true).open(&gitignore)?;
             if !content.ends_with('\n') && !content.is_empty() {

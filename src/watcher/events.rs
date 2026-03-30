@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -9,7 +8,7 @@ use crate::event::{Diff, EventType, FileInfo, LhiEvent, Project, Snapshot};
 use crate::index::IndexEntry;
 
 use super::helpers;
-use super::instance::{LhiWatcher, DEBOUNCE_MS, MAX_FILE_SIZE};
+use super::instance::{DEBOUNCE_MS, LhiWatcher, MAX_FILE_SIZE};
 
 impl LhiWatcher {
     /// Blocking iterator that yields the next debounced filesystem event.
@@ -18,10 +17,9 @@ impl LhiWatcher {
     /// When no events are pending, polls the receiver with a 60-second idle timeout
     /// before retrying. Returns `None` if the watcher channel disconnects.
     pub fn next_event(&mut self) -> Option<LhiEvent> {
-        let mut pending: HashMap<PathBuf, (EventKind, Instant)> = HashMap::new();
-
         loop {
-            let timeout = pending
+            let timeout = self
+                .pending
                 .values()
                 .map(|(_, t)| {
                     let elapsed = t.elapsed();
@@ -35,44 +33,43 @@ impl LhiWatcher {
                 Ok(Ok(event)) => {
                     if let Some(path) = event.paths.first()
                         && !self.is_ignored(path)
-                            && matches!(
-                                event.kind,
-                                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                            )
-                        {
-                            pending.insert(path.clone(), (event.kind, Instant::now()));
-                        }
+                        && matches!(
+                            event.kind,
+                            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                        )
+                    {
+                        self.pending
+                            .insert(path.clone(), (event.kind, Instant::now()));
+                    }
                 }
                 Ok(Err(_)) => return None,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if let Some(lhi_event) = self.flush_ready(&mut pending) {
+                    if let Some(lhi_event) = self.flush_pending() {
                         return Some(lhi_event);
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    return self.flush_ready(&mut pending);
+                    return self.flush_pending();
                 }
             }
 
-            if let Some(lhi_event) = self.flush_ready(&mut pending) {
+            if let Some(lhi_event) = self.flush_pending() {
                 return Some(lhi_event);
             }
         }
     }
 
     /// Checks pending events and returns the first one whose debounce window has elapsed.
-    pub(super) fn flush_ready(
-        &mut self,
-        pending: &mut HashMap<PathBuf, (EventKind, Instant)>,
-    ) -> Option<LhiEvent> {
+    pub(super) fn flush_pending(&mut self) -> Option<LhiEvent> {
         let window = Duration::from_millis(DEBOUNCE_MS);
-        let ready = pending
+        let ready = self
+            .pending
             .iter()
             .find(|(_, (_, t))| t.elapsed() >= window)
             .map(|(p, (k, _))| (p.clone(), *k));
 
         if let Some((path, kind)) = ready {
-            pending.remove(&path);
+            self.pending.remove(&path);
             return self.build_event(&path, kind);
         }
         None
@@ -97,10 +94,15 @@ impl LhiWatcher {
 
         let (snapshot, diff, file_mode) = if path.is_file() {
             if let Ok(meta) = path.metadata()
-                && meta.len() > MAX_FILE_SIZE {
-                    eprintln!("lhi: skipping large file ({} bytes): {}", meta.len(), path.display());
-                    return None;
-                }
+                && meta.len() > MAX_FILE_SIZE
+            {
+                eprintln!(
+                    "lhi: skipping large file ({} bytes): {}",
+                    meta.len(),
+                    path.display()
+                );
+                return None;
+            }
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let hash = match self.store.store_blob(&bytes) {
@@ -110,14 +112,24 @@ impl LhiWatcher {
                             return None;
                         }
                     };
+                    // Skip if content hasn't actually changed (e.g. metadata-only OS event)
+                    if matches!(event_type, EventType::Modify)
+                        && previous_hash.as_ref() == Some(&hash)
+                    {
+                        return None;
+                    }
                     let diff = previous_hash
                         .as_ref()
                         .filter(|prev| *prev != &hash)
                         .map(|prev| Diff {
                             previous_hash: prev.clone(),
                         });
-                    self.previous_hashes.insert(path.to_path_buf(), hash.clone());
-                    let mode = path.metadata().ok().and_then(|m| helpers::get_file_mode(&m));
+                    self.previous_hashes
+                        .insert(path.to_path_buf(), hash.clone());
+                    let mode = path
+                        .metadata()
+                        .ok()
+                        .and_then(|m| helpers::get_file_mode(&m));
                     (
                         Some(Snapshot {
                             content_hash: hash,
@@ -182,9 +194,12 @@ impl LhiWatcher {
     }
 
     /// Returns true if the path should be ignored based on .gitignore rules
-    /// or if it lives inside any `.lhi/` directory (at any nesting level).
+    /// or if it lives inside any `.lhi/` or `.git/` directory (at any nesting level).
     pub(super) fn is_ignored(&self, path: &Path) -> bool {
-        if path.components().any(|c| c.as_os_str() == ".lhi") {
+        if path
+            .components()
+            .any(|c| c.as_os_str() == ".lhi" || c.as_os_str() == ".git")
+        {
             return true;
         }
         let is_dir = path.is_dir();

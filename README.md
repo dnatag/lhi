@@ -96,7 +96,9 @@ Options:
 
 Runs in the foreground (blocking). Useful for troubleshooting or one-off use. The `lhi activate` shell hook uses this command internally.
 
-On first run, captures a baseline snapshot of all existing files. Respects `.gitignore`. Debounces rapid writes (100ms window). Files over 10MB are skipped.
+Only one watcher can run per project — a PID lock file (`.lhi/watcher.pid`) prevents duplicates. If a watcher is already running, the command prints a message and exits cleanly. Stale lock files from crashed processes are handled automatically (the OS releases the file lock on process exit).
+
+On first run, captures a baseline snapshot of all existing files. Respects `.gitignore`. Debounces rapid writes (100ms window). Files over 10MB are skipped. Metadata-only events (where the file content hasn't changed) are silently dropped.
 
 ### `lhi log [FILE]`
 
@@ -107,9 +109,12 @@ Options:
   --since <DURATION>  Filter by time (e.g. 5m, 1h, 2d)
   --branch <NAME>     Filter by git branch
   --json              Output as JSON
+  -f, --follow        Continuously watch for new entries (like tail -f)
 ```
 
 When git branch tracking is available, each entry shows the branch it was recorded on.
+
+With `--follow`, prints existing history then polls for new index entries every 500ms. Combines with `--since`, `--branch`, and file filters. Ctrl+C to stop.
 
 ### `lhi cat <TARGET> [~N]`
 
@@ -180,6 +185,13 @@ Capture a full project snapshot. Useful before risky changes.
 
 Compact the index to keep only the latest entry per file. Reduces `.lhi/index.jsonl` size.
 
+```
+Options:
+  --dedup-only  Only remove consecutive duplicate entries (preserve history)
+```
+
+Without flags, first deduplicates consecutive identical entries, then collapses to one entry per file. With `--dedup-only`, removes duplicates while preserving the full change history.
+
 ## How it works
 
 ```
@@ -191,8 +203,8 @@ Compact the index to keep only the latest entry per file. Reduces `.lhi/index.js
 ```
 
 - **Blob store:** Files are stored by their SHA-256 hash. Identical content is automatically deduplicated. Blobs are zstd-compressed on write; old uncompressed blobs are read transparently. Writes are atomic (temp file + rename). Short hash prefixes are resolved by scanning the blobs directory.
-- **Index:** JSONL format — each line records timestamp, event type, file path, content hash, size, and git branch. Append-only during normal operation; `compact` rewrites it.
-- **Watcher:** Uses OS-native filesystem notifications (`notify` crate) with 100ms debouncing. Ignores `.lhi/` directories at any nesting depth.
+- **Index:** JSONL format — each line records timestamp, event type, file path, content hash, size, and git branch. Append-only during normal operation; `compact` rewrites it. Appends are protected by `fs2` file locks to prevent interleaved writes from concurrent processes.
+- **Watcher:** Uses OS-native filesystem notifications (`notify` crate) with 100ms debouncing. Ignores `.lhi/` directories at any nesting depth. A PID lock file (`.lhi/watcher.pid`) ensures only one watcher runs per project. Metadata-only events (unchanged content) are silently dropped.
 - **Git integration:** Automatically records the current git branch with each event (captured at watcher startup and snapshot time).
 
 ## Logging
@@ -239,6 +251,36 @@ src/
     └── cli.rs          Clap CLI definition
 doc/
 └── src/                mdbook documentation source
+```
+
+## Troubleshooting
+
+### `(eval):2: parse error near '}'` on `source ~/.zshrc`
+
+This happened in older versions when the shell hook was eval'd twice (e.g. re-sourcing your rc file). The hook tried to save the existing `cd` function using `declare -f cd | tail -n +2`, which strips the opening `{` in zsh. This was fixed — update `lhi` and open a fresh shell. If your current session is stuck, reset it:
+
+```bash
+unset -f cd _lhi_orig_cd pushd popd _lhi_hook _lhi_find_root _lhi_deactivate 2>/dev/null
+source ~/.zshrc
+```
+
+### `lhi` commands are killed immediately (`killed` or exit code 137)
+
+macOS Gatekeeper can SIGKILL unsigned or invalidly-signed binaries. This happens if you copy the `lhi` binary manually (e.g. `cp`) — the copy invalidates the code signature. Fix it by re-signing:
+
+```bash
+codesign -f -s - $(which lhi)
+```
+
+Or reinstall with `cargo install --path .`, which produces a properly signed binary.
+
+### `zsh: command not found: _lhi_orig_cd`
+
+The shell hook failed to load (usually due to the parse error above), leaving `cd` in a broken state. Open a new terminal, or reset manually:
+
+```bash
+unset -f cd _lhi_orig_cd 2>/dev/null
+source ~/.zshrc
 ```
 
 ## License

@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::fs;
 use std::path::Path;
 
@@ -36,10 +36,12 @@ pub fn restore(
 
     // Mode 2: --at <hash> — resolve hash to timestamp, then state_at
     if let Some(hash_ref) = at {
-        let full_hash = store.resolve_prefix(hash_ref)
+        let full_hash = store
+            .resolve_prefix(hash_ref)
             .map_err(|_| anyhow::anyhow!("hash not found: {hash_ref}"))?;
         let entries = index.read_all()?;
-        let entry = entries.iter()
+        let entry = entries
+            .iter()
             .find(|e| e.content_hash.as_deref() == Some(&full_hash))
             .ok_or_else(|| anyhow::anyhow!("hash not in index: {hash_ref}"))?;
         let cutoff = entry.timestamp;
@@ -49,7 +51,14 @@ pub fn restore(
             return restore_single_file(&root, &store, f, &full_hash, dry_run, json);
         }
         // --at without file: project-wide restore to that moment
-        return restore_to_state(&root, &index, &store, &index.state_at(cutoff)?, dry_run, json);
+        return restore_to_state(
+            &root,
+            &index,
+            &store,
+            &index.state_at(cutoff)?,
+            dry_run,
+            json,
+        );
     }
 
     // Mode 3: --before <time> — legacy time-based restore
@@ -67,45 +76,82 @@ pub fn restore(
 }
 
 /// Restore a single file to a specific hash.
-fn restore_single_file(root: &Path, store: &BlobStore, file: &str, hash: &str, dry_run: bool, json: bool) -> Result<()> {
+fn restore_single_file(
+    root: &Path,
+    store: &BlobStore,
+    file: &str,
+    hash: &str,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
     let target = root.join(file);
     let content = store.read_blob(hash)?;
 
     if json {
-        let action = RestoreAction { relative_path: file.to_string(), action: "restore".into(), hash: Some(hash.to_string()), file_mode: None };
+        let action = RestoreAction {
+            relative_path: file.to_string(),
+            action: "restore".into(),
+            hash: Some(hash.to_string()),
+            file_mode: None,
+        };
         println!("{}", serde_json::to_string_pretty(&[&action])?);
     } else {
-        let verb = if dry_run { "would restore" } else { "will restore" };
+        let verb = if dry_run {
+            "would restore"
+        } else {
+            "will restore"
+        };
         println!("{verb} {} (hash: {})", file, hash.get(..8).unwrap_or(hash));
     }
 
     if !dry_run {
-        if let Some(parent) = target.parent() { fs::create_dir_all(parent)?; }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
         fs::write(&target, content)?;
-        if !json { println!("Restored 1 file(s)."); }
+        if !json {
+            println!("Restored 1 file(s).");
+        }
     }
     Ok(())
 }
 
 /// Restore multiple files to a given state snapshot.
-fn restore_to_state(root: &Path, index: &Index, store: &BlobStore, state: &[IndexEntry], dry_run: bool, json: bool) -> Result<()> {
+fn restore_to_state(
+    root: &Path,
+    index: &Index,
+    store: &BlobStore,
+    state: &[IndexEntry],
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
     let snapshot_paths: std::collections::HashSet<String> =
         state.iter().map(|e| e.relative_path.clone()).collect();
 
-    let mut actions: Vec<RestoreAction> = state.iter()
+    let mut actions: Vec<RestoreAction> = state
+        .iter()
         .filter_map(|e| to_restore_action(root, e))
         .collect();
 
     // Delete files that didn't exist at the target time
     for rel in &index.all_known_paths()? {
         if !snapshot_paths.contains(rel) && root.join(rel).exists() {
-            actions.push(RestoreAction { relative_path: rel.clone(), action: "delete".into(), hash: None, file_mode: None });
+            actions.push(RestoreAction {
+                relative_path: rel.clone(),
+                action: "delete".into(),
+                hash: None,
+                file_mode: None,
+            });
         }
     }
     actions.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 
     if actions.is_empty() {
-        if json { println!("[]"); } else { println!("Nothing to restore."); }
+        if json {
+            println!("[]");
+        } else {
+            println!("Nothing to restore.");
+        }
         return Ok(());
     }
 
@@ -115,7 +161,11 @@ fn restore_to_state(root: &Path, index: &Index, store: &BlobStore, state: &[Inde
         for a in &actions {
             let verb = if dry_run { "would" } else { "will" };
             match a.action.as_str() {
-                "restore" => println!("{verb} restore {} (hash: {})", a.relative_path, a.hash.as_deref().unwrap_or("?")),
+                "restore" => println!(
+                    "{verb} restore {} (hash: {})",
+                    a.relative_path,
+                    a.hash.as_deref().unwrap_or("?")
+                ),
                 "delete" => println!("{verb} delete {}", a.relative_path),
                 _ => {}
             }
@@ -129,7 +179,9 @@ fn restore_to_state(root: &Path, index: &Index, store: &BlobStore, state: &[Inde
                 "restore" => {
                     if let Some(hash) = &a.hash {
                         let content = store.read_blob(hash)?;
-                        if let Some(parent) = target.parent() { fs::create_dir_all(parent)?; }
+                        if let Some(parent) = target.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
                         fs::write(&target, content)?;
                         #[cfg(unix)]
                         if let Some(mode) = a.file_mode {
@@ -138,11 +190,15 @@ fn restore_to_state(root: &Path, index: &Index, store: &BlobStore, state: &[Inde
                         }
                     }
                 }
-                "delete" => { let _ = fs::remove_file(&target); }
+                "delete" => {
+                    let _ = fs::remove_file(&target);
+                }
                 _ => {}
             }
         }
-        if !json { println!("Restored {} file(s).", actions.len()); }
+        if !json {
+            println!("Restored {} file(s).", actions.len());
+        }
     }
     Ok(())
 }
@@ -162,7 +218,10 @@ fn to_restore_action(root: &Path, entry: &IndexEntry) -> Option<RestoreAction> {
     let target = root.join(&entry.relative_path);
     if entry.event_type == "delete" {
         return target.exists().then(|| RestoreAction {
-            relative_path: entry.relative_path.clone(), action: "delete".into(), hash: None, file_mode: None,
+            relative_path: entry.relative_path.clone(),
+            action: "delete".into(),
+            hash: None,
+            file_mode: None,
         });
     }
     let hash = entry.content_hash.as_ref()?;
@@ -174,8 +233,10 @@ fn to_restore_action(root: &Path, entry: &IndexEntry) -> Option<RestoreAction> {
         None => true,
     };
     needs_restore.then(|| RestoreAction {
-        relative_path: entry.relative_path.clone(), action: "restore".into(),
-        hash: Some(hash.clone()), file_mode: entry.file_mode,
+        relative_path: entry.relative_path.clone(),
+        action: "restore".into(),
+        hash: Some(hash.clone()),
+        file_mode: entry.file_mode,
     })
 }
 
@@ -198,12 +259,19 @@ mod tests {
             (t2, "modify", "src/main.rs", &h2, 16),
             (t1, "create", "src/lib.rs", &h3, 15),
         ] {
-            index.append(&IndexEntry {
-                timestamp: ts, event_type: et.into(),
-                path: dir.path().join(rp).display().to_string(),
-                relative_path: rp.into(), content_hash: Some(h.clone()),
-                size_bytes: Some(sz), label: None, file_mode: None, git_branch: None,
-            }).unwrap();
+            index
+                .append(&IndexEntry {
+                    timestamp: ts,
+                    event_type: et.into(),
+                    path: dir.path().join(rp).display().to_string(),
+                    relative_path: rp.into(),
+                    content_hash: Some(h.clone()),
+                    size_bytes: Some(sz),
+                    label: None,
+                    file_mode: None,
+                    git_branch: None,
+                })
+                .unwrap();
         }
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(dir.path().join("src/main.rs"), "fn main() { v2 }").unwrap();
@@ -217,9 +285,17 @@ mod tests {
         fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
         let index = Index::open(dir.path()).unwrap();
         let cutoff = Utc.with_ymd_and_hms(2026, 3, 14, 10, 30, 0).unwrap();
-        let actions: Vec<RestoreAction> = index.state_at(cutoff).unwrap()
-            .iter().filter_map(|e| to_restore_action(dir.path(), e)).collect();
-        assert!(actions.iter().any(|a| a.relative_path == "src/main.rs" && a.action == "restore"));
+        let actions: Vec<RestoreAction> = index
+            .state_at(cutoff)
+            .unwrap()
+            .iter()
+            .filter_map(|e| to_restore_action(dir.path(), e))
+            .collect();
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.relative_path == "src/main.rs" && a.action == "restore")
+        );
         assert!(!actions.iter().any(|a| a.relative_path == "src/lib.rs"));
     }
 
@@ -239,7 +315,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "fn main() { v1 }"
+        );
     }
 
     #[test]
@@ -255,13 +334,21 @@ mod tests {
                 if let Some(hash) = &a.hash {
                     let content = store.read_blob(hash).unwrap();
                     let target = dir.path().join(&a.relative_path);
-                    if let Some(p) = target.parent() { fs::create_dir_all(p).unwrap(); }
+                    if let Some(p) = target.parent() {
+                        fs::create_dir_all(p).unwrap();
+                    }
                     fs::write(&target, content).unwrap();
                 }
             }
         }
-        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
-        assert_eq!(fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(), "pub fn lib() {}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "fn main() { v1 }"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
+            "pub fn lib() {}"
+        );
     }
 
     #[test]
@@ -271,17 +358,25 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let t3 = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
         let h = store.store_blob(b"agent garbage").unwrap();
-        index.append(&IndexEntry {
-            timestamp: t3, event_type: "create".into(),
-            path: dir.path().join("src/garbage.rs").display().to_string(),
-            relative_path: "src/garbage.rs".into(), content_hash: Some(h),
-            size_bytes: Some(13), label: None, file_mode: None, git_branch: None,
-        }).unwrap();
+        index
+            .append(&IndexEntry {
+                timestamp: t3,
+                event_type: "create".into(),
+                path: dir.path().join("src/garbage.rs").display().to_string(),
+                relative_path: "src/garbage.rs".into(),
+                content_hash: Some(h),
+                size_bytes: Some(13),
+                label: None,
+                file_mode: None,
+                git_branch: None,
+            })
+            .unwrap();
         fs::write(dir.path().join("src/garbage.rs"), "agent garbage").unwrap();
 
         let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
         let state = index.state_at(cutoff).unwrap();
-        let snapshot_paths: std::collections::HashSet<String> = state.iter().map(|e| e.relative_path.clone()).collect();
+        let snapshot_paths: std::collections::HashSet<String> =
+            state.iter().map(|e| e.relative_path.clone()).collect();
         let all_known = index.all_known_paths().unwrap();
         for rel in &all_known {
             if !snapshot_paths.contains(rel) && dir.path().join(rel).exists() {
@@ -298,12 +393,19 @@ mod tests {
         let store = BlobStore::init(dir.path()).unwrap();
         let t3 = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
         let h = store.store_blob(b"new file").unwrap();
-        index.append(&IndexEntry {
-            timestamp: t3, event_type: "create".into(),
-            path: dir.path().join("src/new.rs").display().to_string(),
-            relative_path: "src/new.rs".into(), content_hash: Some(h),
-            size_bytes: Some(8), label: None, file_mode: None, git_branch: None,
-        }).unwrap();
+        index
+            .append(&IndexEntry {
+                timestamp: t3,
+                event_type: "create".into(),
+                path: dir.path().join("src/new.rs").display().to_string(),
+                relative_path: "src/new.rs".into(),
+                content_hash: Some(h),
+                size_bytes: Some(8),
+                label: None,
+                file_mode: None,
+                git_branch: None,
+            })
+            .unwrap();
         fs::write(dir.path().join("src/new.rs"), "new file").unwrap();
 
         let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
@@ -313,16 +415,24 @@ mod tests {
 
         // With --file filter, should still produce a delete action
         let file_filter = "src/new.rs";
-        let mut actions: Vec<RestoreAction> = state.into_iter()
+        let mut actions: Vec<RestoreAction> = state
+            .into_iter()
             .filter(|e| e.relative_path == file_filter)
-            .filter_map(|e| to_restore_action(dir.path(), &e)).collect();
+            .filter_map(|e| to_restore_action(dir.path(), &e))
+            .collect();
         if !snapshot_paths.contains(file_filter) && dir.path().join(file_filter).exists() {
             actions.push(RestoreAction {
-                relative_path: file_filter.to_string(), action: "delete".into(),
-                hash: None, file_mode: None,
+                relative_path: file_filter.to_string(),
+                action: "delete".into(),
+                hash: None,
+                file_mode: None,
             });
         }
-        assert!(actions.iter().any(|a| a.relative_path == "src/new.rs" && a.action == "delete"));
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.relative_path == "src/new.rs" && a.action == "delete")
+        );
     }
 
     #[cfg(unix)]
@@ -334,21 +444,38 @@ mod tests {
         let index = Index::open(dir.path()).unwrap();
         let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
         let h = store.store_blob(b"#!/bin/bash\necho hi").unwrap();
-        index.append(&IndexEntry {
-            timestamp: t1, event_type: "create".into(),
-            path: dir.path().join("run.sh").display().to_string(),
-            relative_path: "run.sh".into(), content_hash: Some(h.clone()),
-            size_bytes: Some(19), label: None, file_mode: Some(0o100755), git_branch: None,
-        }).unwrap();
+        index
+            .append(&IndexEntry {
+                timestamp: t1,
+                event_type: "create".into(),
+                path: dir.path().join("run.sh").display().to_string(),
+                relative_path: "run.sh".into(),
+                content_hash: Some(h.clone()),
+                size_bytes: Some(19),
+                label: None,
+                file_mode: Some(0o100755),
+                git_branch: None,
+            })
+            .unwrap();
         fs::write(dir.path().join("run.sh"), "corrupted").unwrap();
-        let entry = &index.state_at(parse_before("2026-03-14T10:30:00Z").unwrap()).unwrap()[0];
+        let entry = &index
+            .state_at(parse_before("2026-03-14T10:30:00Z").unwrap())
+            .unwrap()[0];
         let a = to_restore_action(dir.path(), entry).unwrap();
         let content = store.read_blob(a.hash.as_ref().unwrap()).unwrap();
         fs::write(dir.path().join("run.sh"), content).unwrap();
         if let Some(mode) = a.file_mode {
-            fs::set_permissions(dir.path().join("run.sh"), fs::Permissions::from_mode(mode)).unwrap();
+            fs::set_permissions(dir.path().join("run.sh"), fs::Permissions::from_mode(mode))
+                .unwrap();
         }
-        assert_eq!(fs::metadata(dir.path().join("run.sh")).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            fs::metadata(dir.path().join("run.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
     }
 
     #[test]
@@ -361,7 +488,10 @@ mod tests {
         let entries = index.query_file("src/main.rs").unwrap();
         let h1 = entries[0].content_hash.as_ref().unwrap();
         restore_single_file(dir.path(), &store, "src/main.rs", h1, false, false).unwrap();
-        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "fn main() { v1 }"
+        );
     }
 
     #[test]
@@ -373,7 +503,10 @@ mod tests {
         let entries = index.query_file("src/main.rs").unwrap();
         let h1 = entries[0].content_hash.as_ref().unwrap();
         restore_single_file(dir.path(), &store, "src/main.rs", h1, true, false).unwrap();
-        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "BROKEN");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "BROKEN"
+        );
     }
 
     #[test]
@@ -385,7 +518,10 @@ mod tests {
         let cutoff = Utc.with_ymd_and_hms(2026, 3, 14, 10, 30, 0).unwrap();
         let state = index.state_at(cutoff).unwrap();
         restore_to_state(dir.path(), &index, &store, &state, false, false).unwrap();
-        assert_eq!(fs::read_to_string(dir.path().join("src/main.rs")).unwrap(), "fn main() { v1 }");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "fn main() { v1 }"
+        );
     }
 
     #[test]

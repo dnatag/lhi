@@ -14,7 +14,8 @@ pub fn info() -> Result<()> {
 
     let index = Index::open(&root)?;
     let entries = index.read_all()?;
-    let unique_files: std::collections::HashSet<_> = entries.iter().map(|e| &e.relative_path).collect();
+    let unique_files: std::collections::HashSet<_> =
+        entries.iter().map(|e| &e.relative_path).collect();
 
     let blobs_dir = lhi_dir.join("blobs");
     let (blob_count, blob_size) = if blobs_dir.exists() {
@@ -22,10 +23,11 @@ pub fn info() -> Result<()> {
         let mut size = 0u64;
         for entry in fs::read_dir(&blobs_dir)?.flatten() {
             if let Ok(meta) = entry.metadata()
-                && meta.is_file() {
-                    count += 1;
-                    size += meta.len();
-                }
+                && meta.is_file()
+            {
+                count += 1;
+                size += meta.len();
+            }
         }
         (count, size)
     } else {
@@ -62,7 +64,9 @@ fn human_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
     let mut size = bytes as f64;
     for unit in UNITS {
-        if size < 1024.0 { return format!("{size:.1} {unit}"); }
+        if size < 1024.0 {
+            return format!("{size:.1} {unit}");
+        }
         size /= 1024.0;
     }
     format!("{size:.1} TB")
@@ -117,16 +121,24 @@ mod tests {
         let h1 = store.store_blob(b"content1").unwrap();
         let h2 = store.store_blob(b"content2").unwrap();
         for (rel, h) in [("a.rs", &h1), ("b.rs", &h2)] {
-            index.append(&crate::index::IndexEntry {
-                timestamp: ts, event_type: "create".into(),
-                path: dir.path().join(rel).display().to_string(),
-                relative_path: rel.into(), content_hash: Some(h.clone()),
-                size_bytes: Some(8), label: None, file_mode: None, git_branch: None,
-            }).unwrap();
+            index
+                .append(&crate::index::IndexEntry {
+                    timestamp: ts,
+                    event_type: "create".into(),
+                    path: dir.path().join(rel).display().to_string(),
+                    relative_path: rel.into(),
+                    content_hash: Some(h.clone()),
+                    size_bytes: Some(8),
+                    label: None,
+                    file_mode: None,
+                    git_branch: None,
+                })
+                .unwrap();
         }
 
         let entries = index.read_all().unwrap();
-        let unique_files: std::collections::HashSet<_> = entries.iter().map(|e| &e.relative_path).collect();
+        let unique_files: std::collections::HashSet<_> =
+            entries.iter().map(|e| &e.relative_path).collect();
         let blobs_dir = dir.path().join(".lhi/blobs");
         let blob_count = fs::read_dir(&blobs_dir).unwrap().count();
 

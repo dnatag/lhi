@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -19,11 +20,85 @@ pub struct LhiWatcher {
     pub(super) gitignore: Gitignore,
     pub(super) store: BlobStore,
     pub(super) index: Index,
-    /// Tracks the last known content hash per file for diff support.
     pub(super) previous_hashes: HashMap<PathBuf, String>,
     pub(super) git_branch: Option<String>,
     _watcher: notify::RecommendedWatcher,
     pub(super) rx: mpsc::Receiver<notify::Result<Event>>,
+    pub(super) pending: HashMap<PathBuf, (notify::EventKind, std::time::Instant)>,
+    /// Held for the lifetime of the watcher to prevent duplicates.
+    _lock_file: fs::File,
+}
+
+fn pid_path(root: &Path) -> PathBuf {
+    root.join(".lhi/watcher.pid")
+}
+
+/// Returns true if a process with the given PID is alive.
+fn pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+/// Check if another watcher is already running for this root.
+/// Returns `Err` if a live watcher holds the lock.
+fn acquire_pid_lock(root: &Path) -> anyhow::Result<fs::File> {
+    use fs2::FileExt;
+    use std::io::Write;
+    let path = pid_path(root);
+    #[allow(clippy::suspicious_open_options)]
+    // intentionally no truncate: we read existing PID before overwriting
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&path)?;
+    if file.try_lock_exclusive().is_err() {
+        let pid = fs::read_to_string(&path).unwrap_or_default();
+        anyhow::bail!(
+            "another watcher is already running for {} (pid {})",
+            root.display(),
+            pid.trim()
+        );
+    }
+    file.set_len(0)?;
+    let mut f = &file;
+    write!(f, "{}", std::process::id())?;
+    f.flush()?;
+    Ok(file)
+}
+
+/// Kill a stale watcher for the given root, if one exists.
+/// Returns Ok(Some(pid)) if a process was killed, Ok(None) if no stale watcher found.
+pub fn kill_stale_watcher(root: &Path) -> anyhow::Result<Option<u32>> {
+    let root = root.canonicalize()?;
+    let path = pid_path(&root);
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    let pid: u32 = match content.trim().parse() {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = fs::remove_file(&path);
+            return Ok(None);
+        }
+    };
+    if pid_alive(pid) {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+        // Wait briefly for it to exit
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if pid_alive(pid) {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+        let _ = fs::remove_file(&path);
+        Ok(Some(pid))
+    } else {
+        let _ = fs::remove_file(&path);
+        Ok(None)
+    }
 }
 
 impl LhiWatcher {
@@ -36,6 +111,8 @@ impl LhiWatcher {
         let (gitignore, _) = Gitignore::new(&gitignore_path);
         let store = BlobStore::init(&root)?;
         let index = Index::open(&root)?;
+        // Acquire after .lhi/ is created by BlobStore::init / Index::open
+        let _lock_file = acquire_pid_lock(&root)?;
         let git_branch = crate::util::current_git_branch(&root);
 
         Self::baseline_snapshot(&root, &store, &index, &git_branch)?;
@@ -55,6 +132,8 @@ impl LhiWatcher {
             git_branch,
             _watcher: watcher,
             rx,
+            pending: HashMap::new(),
+            _lock_file,
         })
     }
 
@@ -69,14 +148,22 @@ impl LhiWatcher {
         if !index.read_all()?.is_empty() {
             return Ok(());
         }
-        for entry in ignore::WalkBuilder::new(root).hidden(false).build().flatten() {
+        for entry in ignore::WalkBuilder::new(root)
+            .hidden(false)
+            .build()
+            .flatten()
+        {
             let path = entry.path();
             if !path.is_file() || path.is_symlink() {
                 continue;
             }
             let relative = path.strip_prefix(root).unwrap_or(path);
             let rel_str = relative.display().to_string();
-            if rel_str.starts_with(".lhi") || rel_str.contains("/.lhi") {
+            if rel_str.starts_with(".lhi")
+                || rel_str.contains("/.lhi")
+                || rel_str.starts_with(".git")
+                || rel_str.contains("/.git")
+            {
                 continue;
             }
             let meta = match path.metadata() {
@@ -120,12 +207,18 @@ impl LhiWatcher {
     }
 }
 
+impl Drop for LhiWatcher {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(pid_path(&self.root));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::EventKind;
     use std::fs;
     use std::time::{Duration, Instant};
-    use notify::EventKind;
 
     fn setup_temp_project() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -139,28 +232,44 @@ mod tests {
     fn gitignore_filters_target_dir() {
         let dir = setup_temp_project();
         let (gi, _) = Gitignore::new(&dir.path().join(".gitignore"));
-        assert!(helpers::is_ignored_by(&gi, dir.path(), &dir.path().join("target/debug/bin")));
+        assert!(helpers::is_ignored_by(
+            &gi,
+            dir.path(),
+            &dir.path().join("target/debug/bin")
+        ));
     }
 
     #[test]
     fn gitignore_filters_log_files() {
         let dir = setup_temp_project();
         let (gi, _) = Gitignore::new(&dir.path().join(".gitignore"));
-        assert!(helpers::is_ignored_by(&gi, dir.path(), &dir.path().join("app.log")));
+        assert!(helpers::is_ignored_by(
+            &gi,
+            dir.path(),
+            &dir.path().join("app.log")
+        ));
     }
 
     #[test]
     fn gitignore_filters_lhi_dir() {
         let dir = setup_temp_project();
         let (gi, _) = Gitignore::new(&dir.path().join(".gitignore"));
-        assert!(helpers::is_ignored_by(&gi, dir.path(), &dir.path().join(".lhi/snapshots/abc")));
+        assert!(helpers::is_ignored_by(
+            &gi,
+            dir.path(),
+            &dir.path().join(".lhi/snapshots/abc")
+        ));
     }
 
     #[test]
     fn gitignore_allows_source_files() {
         let dir = setup_temp_project();
         let (gi, _) = Gitignore::new(&dir.path().join(".gitignore"));
-        assert!(!helpers::is_ignored_by(&gi, dir.path(), &dir.path().join("src/main.rs")));
+        assert!(!helpers::is_ignored_by(
+            &gi,
+            dir.path(),
+            &dir.path().join("src/main.rs")
+        ));
     }
 
     #[test]
@@ -217,8 +326,16 @@ mod tests {
                 break;
             }
         }
-        assert!(events.iter().all(|e| !e.file.relative_path.contains("debug.log")));
-        assert!(events.iter().any(|e| e.file.relative_path.contains("lib.rs")));
+        assert!(
+            events
+                .iter()
+                .all(|e| !e.file.relative_path.contains("debug.log"))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.file.relative_path.contains("lib.rs"))
+        );
     }
 
     #[test]
@@ -273,10 +390,8 @@ mod tests {
     #[test]
     fn watcher_skips_symlinks() {
         let dir = setup_temp_project();
-        std::os::unix::fs::symlink(
-            dir.path().join("src/main.rs"),
-            dir.path().join("link.rs"),
-        ).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("src/main.rs"), dir.path().join("link.rs"))
+            .unwrap();
         let mut watcher = LhiWatcher::new(dir.path()).unwrap();
         std::thread::sleep(Duration::from_millis(100));
 
@@ -290,22 +405,26 @@ mod tests {
                 break;
             }
         }
-        assert!(events.iter().all(|e| !e.file.relative_path.contains("link.rs")),
-            "symlink events should be skipped");
+        assert!(
+            events
+                .iter()
+                .all(|e| !e.file.relative_path.contains("link.rs")),
+            "symlink events should be skipped"
+        );
     }
 
     fn recv_timeout(watcher: &mut LhiWatcher, timeout: Duration) -> Option<crate::event::LhiEvent> {
         let deadline = Instant::now() + timeout;
-        let mut pending: HashMap<PathBuf, (EventKind, Instant)> = HashMap::new();
         let window = Duration::from_millis(DEBOUNCE_MS);
 
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return watcher.flush_ready(&mut pending);
+                return watcher.flush_pending();
             }
 
-            let wait = pending
+            let wait = watcher
+                .pending
                 .values()
                 .map(|(_, t)| window.saturating_sub(t.elapsed()))
                 .min()
@@ -321,18 +440,20 @@ mod tests {
                                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                             )
                         {
-                            pending.insert(path.clone(), (event.kind, Instant::now()));
+                            watcher
+                                .pending
+                                .insert(path.clone(), (event.kind, Instant::now()));
                         }
                     }
                 }
                 Ok(Err(_)) => return None,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return watcher.flush_ready(&mut pending);
+                    return watcher.flush_pending();
                 }
             }
 
-            if let Some(e) = watcher.flush_ready(&mut pending) {
+            if let Some(e) = watcher.flush_pending() {
                 return Some(e);
             }
         }
@@ -356,8 +477,12 @@ mod tests {
         let e = event.unwrap();
         assert!(e.file.relative_path.contains("doomed.txt"));
         assert!(
-            matches!(e.event_type, crate::event::EventType::Delete | crate::event::EventType::Modify),
-            "expected Delete or Modify event, got {:?}", e.event_type
+            matches!(
+                e.event_type,
+                crate::event::EventType::Delete | crate::event::EventType::Modify
+            ),
+            "expected Delete or Modify event, got {:?}",
+            e.event_type
         );
     }
 
@@ -384,8 +509,70 @@ mod tests {
                 break;
             }
         }
-        assert!(events.len() <= 2, "expected debounced events, got {}", events.len());
+        assert!(
+            events.len() <= 2,
+            "expected debounced events, got {}",
+            events.len()
+        );
         assert!(!events.is_empty());
+    }
+
+    /// Regression: a single file modify must produce exactly one event,
+    /// not 4 duplicates from multiple OS-level notifications (FSEvents on macOS).
+    #[test]
+    fn single_modify_emits_one_event() {
+        let dir = setup_temp_project();
+        let mut watcher = LhiWatcher::new(dir.path()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Create the file first and drain that event
+        fs::write(dir.path().join("once.txt"), "initial").unwrap();
+        let _ = recv_timeout(&mut watcher, Duration::from_secs(2));
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Single modify
+        fs::write(dir.path().join("once.txt"), "changed").unwrap();
+
+        let mut events = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Some(e) = recv_timeout(&mut watcher, Duration::from_millis(300)) {
+                if e.file.relative_path.contains("once.txt") {
+                    events.push(e);
+                }
+            } else {
+                break;
+            }
+        }
+        assert_eq!(
+            events.len(),
+            1,
+            "single modify should emit exactly 1 event, got {}",
+            events.len()
+        );
+    }
+
+    /// Regression: rewriting a file with identical content should not emit an event,
+    /// since the content hash hasn't changed (metadata-only OS notification).
+    #[test]
+    fn unchanged_content_skipped() {
+        let dir = setup_temp_project();
+        let mut watcher = LhiWatcher::new(dir.path()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        fs::write(dir.path().join("stable.txt"), "same").unwrap();
+        let e1 = recv_timeout(&mut watcher, Duration::from_secs(2));
+        assert!(e1.is_some(), "first write should emit an event");
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Rewrite with identical content
+        fs::write(dir.path().join("stable.txt"), "same").unwrap();
+
+        let e2 = recv_timeout(&mut watcher, Duration::from_millis(500));
+        assert!(
+            e2.is_none(),
+            "rewrite with same content should not emit an event"
+        );
     }
 
     #[test]
@@ -395,12 +582,58 @@ mod tests {
         drop(_w1);
 
         let canon = dir.path().canonicalize().unwrap();
-        let count_before = crate::index::Index::open(&canon).unwrap().read_all().unwrap().len();
+        let count_before = crate::index::Index::open(&canon)
+            .unwrap()
+            .read_all()
+            .unwrap()
+            .len();
 
         fs::write(dir.path().join("extra.txt"), "new").unwrap();
         let _w2 = LhiWatcher::new(dir.path()).unwrap();
-        let count_after = crate::index::Index::open(&canon).unwrap().read_all().unwrap().len();
+        let count_after = crate::index::Index::open(&canon)
+            .unwrap()
+            .read_all()
+            .unwrap()
+            .len();
 
         assert_eq!(count_before, count_after, "baseline should not run again");
+    }
+
+    #[test]
+    fn watcher_creates_pid_lock_file() {
+        let dir = setup_temp_project();
+        let watcher = LhiWatcher::new(dir.path()).unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let pid_file = canon.join(".lhi/watcher.pid");
+        assert!(pid_file.exists(), "watcher.pid should exist");
+        let content = fs::read_to_string(&pid_file).unwrap();
+        assert_eq!(content, std::process::id().to_string());
+        drop(watcher);
+        assert!(!pid_file.exists(), "watcher.pid should be removed on drop");
+    }
+
+    #[test]
+    fn second_watcher_is_rejected() {
+        let dir = setup_temp_project();
+        let _w1 = LhiWatcher::new(dir.path()).unwrap();
+        let result = LhiWatcher::new(dir.path());
+        assert!(result.is_err());
+        let err = format!("{}", result.err().unwrap());
+        assert!(
+            err.contains("another watcher is already running"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn stale_pid_file_does_not_block() {
+        let dir = setup_temp_project();
+        let canon = dir.path().canonicalize().unwrap();
+        // Simulate a stale PID file (no lock held, dead PID)
+        fs::create_dir_all(canon.join(".lhi")).unwrap();
+        fs::write(canon.join(".lhi/watcher.pid"), "99999").unwrap();
+        // Should succeed because no lock is held
+        let w = LhiWatcher::new(dir.path());
+        assert!(w.is_ok(), "stale pid file should not block: {:?}", w.err());
     }
 }

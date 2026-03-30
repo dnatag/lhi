@@ -43,6 +43,9 @@ enum Command {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Continuously watch for new entries (like tail -f)
+        #[arg(short, long)]
+        follow: bool,
     },
     /// Print snapshot content by hash or file reference
     Cat {
@@ -96,7 +99,11 @@ enum Command {
         label: Option<String>,
     },
     /// Compact index to latest entry per file
-    Compact,
+    Compact {
+        /// Only remove consecutive duplicate entries (preserve history)
+        #[arg(long)]
+        dedup_only: bool,
+    },
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -105,13 +112,41 @@ pub fn run() -> anyhow::Result<()> {
         Command::Init { path } => commands::init(&path),
         Command::Watch { path, verbose } => commands::watch(&path, verbose),
         Command::Activate => commands::activate(),
-        Command::Log { file, since, branch, json } => commands::log(file.as_deref(), since.as_deref(), branch.as_deref(), json),
+        Command::Log {
+            file,
+            since,
+            branch,
+            json,
+            follow,
+        } => commands::log(
+            file.as_deref(),
+            since.as_deref(),
+            branch.as_deref(),
+            json,
+            follow,
+        ),
         Command::Cat { target, rev } => commands::cat(&target, rev.as_deref()),
-        Command::Diff { arg1, arg2, arg3 } => commands::diff(&arg1, arg2.as_deref(), arg3.as_deref()),
+        Command::Diff { arg1, arg2, arg3 } => {
+            commands::diff(&arg1, arg2.as_deref(), arg3.as_deref())
+        }
         Command::Search { query, file } => commands::search(&query, file.as_deref()),
         Command::Info => commands::info(),
-        Command::Restore { file, rev, at, before, dry_run, json } => commands::restore(file.as_deref(), rev.as_deref(), at.as_deref(), before.as_deref(), dry_run, json),
+        Command::Restore {
+            file,
+            rev,
+            at,
+            before,
+            dry_run,
+            json,
+        } => commands::restore(
+            file.as_deref(),
+            rev.as_deref(),
+            at.as_deref(),
+            before.as_deref(),
+            dry_run,
+            json,
+        ),
         Command::Snapshot { label } => commands::snapshot(label.as_deref()),
-        Command::Compact => commands::compact(),
+        Command::Compact { dedup_only } => commands::compact(dedup_only),
     }
 }

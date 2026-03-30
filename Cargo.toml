@@ -17,5 +17,7 @@ zstd = "0.13"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+fs2 = "0.4.3"
+libc = "0.2.183"
 [dev-dependencies]
 tempfile = "3"

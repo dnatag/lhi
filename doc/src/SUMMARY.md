@@ -5,3 +5,4 @@
 - [Commands](./commands.md)
 - [How It Works](./internals.md)
 - [Developer Guide](./developer-guide.md)
+- [Troubleshooting](./troubleshooting.md)

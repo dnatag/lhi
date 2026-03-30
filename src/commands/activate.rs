@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::env;
 
 /// Prints a shell hook script to stdout that auto-starts `lhi watch`
@@ -57,16 +57,30 @@ _lhi_find_root() {
 }
 
 _lhi_get_pid() {
-    printf '%s\n' "$_LHI_WATCHERS" | while IFS='	' read -r r p; do
-        if [ "$r" = "$1" ]; then printf '%s' "$p"; return 0; fi
+    local IFS_SAVE="$IFS" r p
+    IFS=$'\n'
+    for line in $_LHI_WATCHERS; do
+        IFS=$'\t' read -r r p <<< "$line"
+        if [ "$r" = "$1" ]; then
+            IFS="$IFS_SAVE"
+            printf '%s' "$p"
+            return 0
+        fi
     done
+    IFS="$IFS_SAVE"
     return 1
 }
 
 _lhi_remove() {
-    _LHI_WATCHERS="$(printf '%s\n' "$_LHI_WATCHERS" | while IFS='	' read -r r p; do
-        [ "$r" != "$1" ] && printf '%s\t%s\n' "$r" "$p"
-    done)"
+    local new="" IFS_SAVE="$IFS" r p
+    IFS=$'\n'
+    for line in $_LHI_WATCHERS; do
+        IFS=$'\t' read -r r p <<< "$line"
+        [ "$r" != "$1" ] && new="${new:+${new}
+}${r}	$p"
+    done
+    IFS="$IFS_SAVE"
+    _LHI_WATCHERS="$new"
 }
 
 _lhi_hook() {
@@ -80,12 +94,10 @@ _lhi_hook() {
     local wpid=$!
     disown "$wpid" 2>/dev/null
     sleep 0.1
-    if ! kill -0 "$wpid" 2>/dev/null; then
-        printf 'lhi: watcher failed to start for %s (see ~/.lhi-watch.log)\n' "$root" >&2
-        return 1
-    fi
-    _LHI_WATCHERS="${_LHI_WATCHERS:+${_LHI_WATCHERS}
+    if kill -0 "$wpid" 2>/dev/null; then
+        _LHI_WATCHERS="${_LHI_WATCHERS:+${_LHI_WATCHERS}
 }${root}	$wpid"
+    fi
 }
 
 _lhi_deactivate() {
@@ -96,7 +108,7 @@ _lhi_deactivate() {
     trap - EXIT
 
     if declare -f _lhi_orig_cd >/dev/null 2>&1; then
-        eval "cd() $(declare -f _lhi_orig_cd | tail -n +2)"
+        eval "$(declare -f _lhi_orig_cd | sed '1s/_lhi_orig_cd/cd/')"
         unset -f _lhi_orig_cd 2>/dev/null
     else
         unset -f cd 2>/dev/null
@@ -107,7 +119,7 @@ _lhi_deactivate() {
 
 # Save existing cd override if present (e.g. from another tool)
 if declare -f cd >/dev/null 2>&1; then
-    eval "_lhi_orig_cd() $(declare -f cd | tail -n +2)"
+    eval "$(declare -f cd | sed '1s/cd ()/_lhi_orig_cd ()/')"
     cd() { _lhi_orig_cd "$@" && _lhi_hook; }
 else
     cd() { builtin cd "$@" && _lhi_hook; }
@@ -153,11 +165,9 @@ _lhi_hook() {
     local wpid=$!
     disown "$wpid" 2>/dev/null
     sleep 0.1
-    if ! kill -0 "$wpid" 2>/dev/null; then
-        printf 'lhi: watcher failed to start for %s (see ~/.lhi-watch.log)\n' "$root" >&2
-        return 1
+    if kill -0 "$wpid" 2>/dev/null; then
+        _LHI_PIDS[$root]=$wpid
     fi
-    _LHI_PIDS[$root]=$wpid
 }
 
 _lhi_deactivate() {
@@ -170,7 +180,7 @@ _lhi_deactivate() {
     trap - EXIT
 
     if declare -f _lhi_orig_cd >/dev/null 2>&1; then
-        eval "cd() $(declare -f _lhi_orig_cd | tail -n +2)"
+        eval "$(declare -f _lhi_orig_cd | sed '1s/_lhi_orig_cd/cd/')"
         unset -f _lhi_orig_cd 2>/dev/null
     else
         unset -f cd 2>/dev/null
@@ -181,7 +191,7 @@ _lhi_deactivate() {
 
 # Save existing cd override if present (e.g. from another tool)
 if declare -f cd >/dev/null 2>&1; then
-    eval "_lhi_orig_cd() $(declare -f cd | tail -n +2)"
+    eval "$(declare -f cd | sed '1s/cd ()/_lhi_orig_cd ()/')"
     cd() { _lhi_orig_cd "$@" && _lhi_hook; }
 else
     cd() { builtin cd "$@" && _lhi_hook; }

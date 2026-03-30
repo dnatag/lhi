@@ -75,7 +75,11 @@ mod tests {
         }
     }
 
-    fn make_event(event_type: EventType, snapshot: Option<Snapshot>, diff: Option<Diff>) -> LhiEvent {
+    fn make_event(
+        event_type: EventType,
+        snapshot: Option<Snapshot>,
+        diff: Option<Diff>,
+    ) -> LhiEvent {
         LhiEvent {
             version: 1,
             timestamp: Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap(),
@@ -91,7 +95,11 @@ mod tests {
     fn roundtrip_modify_event() {
         let event = make_event(
             EventType::Modify,
-            Some(Snapshot { content_hash: "abc123".into(), size_bytes: 1024, label: None }),
+            Some(Snapshot {
+                content_hash: "abc123".into(),
+                size_bytes: 1024,
+                label: None,
+            }),
             None,
         );
         let json = serde_json::to_string(&event).unwrap();
@@ -105,13 +113,20 @@ mod tests {
     fn roundtrip_create_event() {
         let event = make_event(
             EventType::Create,
-            Some(Snapshot { content_hash: "def456".into(), size_bytes: 512, label: Some("initial".into()) }),
+            Some(Snapshot {
+                content_hash: "def456".into(),
+                size_bytes: 512,
+                label: Some("initial".into()),
+            }),
             None,
         );
         let json = serde_json::to_string(&event).unwrap();
         let back: LhiEvent = serde_json::from_str(&json).unwrap();
         assert!(matches!(back.event_type, EventType::Create));
-        assert_eq!(back.snapshot.as_ref().unwrap().label.as_deref(), Some("initial"));
+        assert_eq!(
+            back.snapshot.as_ref().unwrap().label.as_deref(),
+            Some("initial")
+        );
     }
 
     #[test]
@@ -150,8 +165,14 @@ mod tests {
     fn event_with_diff() {
         let event = make_event(
             EventType::Modify,
-            Some(Snapshot { content_hash: "new".into(), size_bytes: 2048, label: None }),
-            Some(Diff { previous_hash: "old".into() }),
+            Some(Snapshot {
+                content_hash: "new".into(),
+                size_bytes: 2048,
+                label: None,
+            }),
+            Some(Diff {
+                previous_hash: "old".into(),
+            }),
         );
         let json = serde_json::to_string(&event).unwrap();
         let back: LhiEvent = serde_json::from_str(&json).unwrap();

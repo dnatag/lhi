@@ -1,3 +1,4 @@
+mod activate;
 mod cat;
 mod compact;
 mod diff;
@@ -8,8 +9,8 @@ mod restore;
 mod search;
 mod snapshot;
 mod watch;
-mod activate;
 
+pub use activate::activate;
 pub use cat::cat;
 pub use compact::compact;
 pub use diff::diff;
@@ -20,9 +21,8 @@ pub use restore::restore;
 pub use search::search;
 pub use snapshot::snapshot;
 pub use watch::watch;
-pub use activate::activate;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use chrono::{Duration, Utc};
 
 pub(crate) use crate::util::get_file_mode;
@@ -32,14 +32,19 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Returns the Nth most recent content hash for a file (1-indexed, ~1 = latest).
 pub(crate) fn file_revision(index: &crate::index::Index, file: &str, n: usize) -> Result<String> {
     let entries = index.query_file(file)?;
-    let hashes: Vec<_> = entries.iter().rev()
+    let hashes: Vec<_> = entries
+        .iter()
+        .rev()
         .filter_map(|e| e.content_hash.as_deref())
         .collect();
     if hashes.is_empty() {
         bail!("no history for file: {file}");
     }
     if n == 0 || n > hashes.len() {
-        bail!("revision ~{n} out of range (file has {} revisions)", hashes.len());
+        bail!(
+            "revision ~{n} out of range (file has {} revisions)",
+            hashes.len()
+        );
     }
     Ok(hashes[n - 1].to_string())
 }
@@ -50,13 +55,19 @@ pub(crate) fn parse_rev(s: &str) -> Option<usize> {
 }
 
 /// Parses a "since" duration string (e.g. "5m", "1h") into a UTC timestamp.
-fn parse_since(s: &str) -> Result<chrono::DateTime<Utc>> { parse_duration_ago(s) }
+fn parse_since(s: &str) -> Result<chrono::DateTime<Utc>> {
+    parse_duration_ago(s)
+}
 
 /// Parses a "before" time string into a UTC timestamp.
 /// Accepts relative durations ("5m"), ISO 8601, or HH:MM local time.
 fn parse_before(s: &str) -> Result<chrono::DateTime<Utc>> {
-    if let Ok(ts) = parse_duration_ago(s) { return Ok(ts); }
-    if let Ok(ts) = s.parse::<chrono::DateTime<Utc>>() { return Ok(ts); }
+    if let Ok(ts) = parse_duration_ago(s) {
+        return Ok(ts);
+    }
+    if let Ok(ts) = s.parse::<chrono::DateTime<Utc>>() {
+        return Ok(ts);
+    }
     if let Ok(naive) = chrono::NaiveTime::parse_from_str(s, "%H:%M") {
         let dt = chrono::Local::now().date_naive().and_time(naive);
         return match dt.and_local_timezone(chrono::Local) {
@@ -72,10 +83,12 @@ fn parse_before(s: &str) -> Result<chrono::DateTime<Utc>> {
 /// and returns the corresponding UTC timestamp in the past.
 fn parse_duration_ago(s: &str) -> Result<chrono::DateTime<Utc>> {
     let s = s.trim().trim_end_matches(" ago").trim();
-    let (num_str, unit) = s.find(|c: char| !c.is_ascii_digit())
+    let (num_str, unit) = s
+        .find(|c: char| !c.is_ascii_digit())
         .map(|i| (&s[..i], s[i..].trim()))
         .ok_or_else(|| anyhow::anyhow!("Cannot parse: '{s}'"))?;
-    let num: i64 = num_str.parse()
+    let num: i64 = num_str
+        .parse()
         .map_err(|_| anyhow::anyhow!("Not a number: '{num_str}'"))?;
     if num < 0 {
         bail!("Duration must not be negative: '{s}'");
@@ -172,12 +185,19 @@ mod tests {
         let h1 = store.store_blob(b"v1").unwrap();
         let h2 = store.store_blob(b"v2").unwrap();
         for (ts, h) in [(t1, &h1), (t2, &h2)] {
-            index.append(&crate::index::IndexEntry {
-                timestamp: ts, event_type: "modify".into(),
-                path: "a.rs".into(), relative_path: "a.rs".into(),
-                content_hash: Some(h.clone()), size_bytes: Some(2),
-                label: None, file_mode: None, git_branch: None,
-            }).unwrap();
+            index
+                .append(&crate::index::IndexEntry {
+                    timestamp: ts,
+                    event_type: "modify".into(),
+                    path: "a.rs".into(),
+                    relative_path: "a.rs".into(),
+                    content_hash: Some(h.clone()),
+                    size_bytes: Some(2),
+                    label: None,
+                    file_mode: None,
+                    git_branch: None,
+                })
+                .unwrap();
         }
         assert_eq!(file_revision(&index, "a.rs", 1).unwrap(), h2);
         assert_eq!(file_revision(&index, "a.rs", 2).unwrap(), h1);
@@ -190,12 +210,19 @@ mod tests {
         let index = crate::index::Index::open(dir.path()).unwrap();
         let ts = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 3, 14, 10, 0, 0).unwrap();
         let h = store.store_blob(b"only").unwrap();
-        index.append(&crate::index::IndexEntry {
-            timestamp: ts, event_type: "create".into(),
-            path: "a.rs".into(), relative_path: "a.rs".into(),
-            content_hash: Some(h), size_bytes: Some(4),
-            label: None, file_mode: None, git_branch: None,
-        }).unwrap();
+        index
+            .append(&crate::index::IndexEntry {
+                timestamp: ts,
+                event_type: "create".into(),
+                path: "a.rs".into(),
+                relative_path: "a.rs".into(),
+                content_hash: Some(h),
+                size_bytes: Some(4),
+                label: None,
+                file_mode: None,
+                git_branch: None,
+            })
+            .unwrap();
         assert!(file_revision(&index, "a.rs", 0).is_err());
         assert!(file_revision(&index, "a.rs", 2).is_err());
     }

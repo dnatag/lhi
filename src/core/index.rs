@@ -33,14 +33,24 @@ impl Index {
         })
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn append(&self, entry: &IndexEntry) -> io::Result<()> {
-        let mut file = OpenOptions::new()
+        use fs2::FileExt;
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
+        file.lock_exclusive()?;
+        let mut writer = io::BufWriter::new(&file);
         let line = serde_json::to_string(entry)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        writeln!(file, "{}", line)
+        writeln!(writer, "{}", line)?;
+        writer.flush()?;
+        file.unlock()?;
+        Ok(())
     }
 
     pub fn read_all(&self) -> io::Result<Vec<IndexEntry>> {
@@ -100,6 +110,25 @@ impl Index {
             .collect())
     }
 
+    /// Remove consecutive duplicate entries for the same file with the same content hash.
+    /// Preserves history order and all entries where content actually changed.
+    /// Returns the number of entries after dedup.
+    pub fn dedup(&self) -> io::Result<usize> {
+        let entries = self.read_all()?;
+        let mut last_hash: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
+        let deduped: Vec<_> = entries
+            .into_iter()
+            .filter(|e| {
+                let prev = last_hash.get(&e.relative_path);
+                let dominated = prev == Some(&e.content_hash);
+                last_hash.insert(e.relative_path.clone(), e.content_hash.clone());
+                !dominated
+            })
+            .collect();
+        self.rewrite(&deduped)
+    }
+
     /// Compact the index: keep only the latest entry per file.
     pub fn compact(&self) -> io::Result<usize> {
         let entries = self.read_all()?;
@@ -113,19 +142,22 @@ impl Index {
             v.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
             v
         };
-        let count = compacted.len();
-        // Atomic rewrite: write to temp, then rename
+        self.rewrite(&compacted)
+    }
+
+    /// Atomically rewrite the index with the given entries.
+    fn rewrite(&self, entries: &[IndexEntry]) -> io::Result<usize> {
         let tmp = self.path.with_extension("jsonl.tmp");
         {
             let mut file = fs::File::create(&tmp)?;
-            for entry in &compacted {
+            for entry in entries {
                 let line = serde_json::to_string(entry)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 writeln!(file, "{}", line)?;
             }
         }
         fs::rename(&tmp, &self.path)?;
-        Ok(count)
+        Ok(entries.len())
     }
 }
 
@@ -273,5 +305,42 @@ mod tests {
         idx.append(&entry).unwrap();
         let entries = idx.read_all().unwrap();
         assert_eq!(entries[0].git_branch.as_deref(), Some("feature-x"));
+    }
+
+    #[test]
+    fn dedup_removes_consecutive_same_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = Index::open(dir.path()).unwrap();
+        let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 1).unwrap();
+        let t3 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 2).unwrap();
+        let t4 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 3).unwrap();
+        // 4 duplicate modify events (the bug we fixed)
+        for ts in [t1, t2, t3, t4] {
+            idx.append(&make_entry("a.rs", "modify", Some("same_hash"), ts))
+                .unwrap();
+        }
+        assert_eq!(idx.read_all().unwrap().len(), 4);
+        assert_eq!(idx.dedup().unwrap(), 1);
+        assert_eq!(idx.read_all().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn dedup_preserves_real_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = Index::open(dir.path()).unwrap();
+        let t1 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 1).unwrap();
+        let t3 = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 2).unwrap();
+        idx.append(&make_entry("a.rs", "modify", Some("v1"), t1))
+            .unwrap();
+        idx.append(&make_entry("a.rs", "modify", Some("v1"), t2))
+            .unwrap(); // dup
+        idx.append(&make_entry("a.rs", "modify", Some("v2"), t3))
+            .unwrap(); // real change
+        assert_eq!(idx.dedup().unwrap(), 2);
+        let entries = idx.read_all().unwrap();
+        assert_eq!(entries[0].content_hash.as_deref(), Some("v1"));
+        assert_eq!(entries[1].content_hash.as_deref(), Some("v2"));
     }
 }

@@ -22,8 +22,7 @@ impl BlobStore {
         let hash = hex_sha256(content);
         let path = self.blob_path(&hash)?;
         if !path.exists() {
-            let compressed = zstd::encode_all(content, 3)
-                .map_err(io::Error::other)?;
+            let compressed = zstd::encode_all(content, 3).map_err(io::Error::other)?;
             let tmp = path.with_extension("tmp");
             fs::write(&tmp, &compressed)?;
             fs::rename(&tmp, &path)?;
@@ -52,7 +51,10 @@ impl BlobStore {
 
     fn blob_path(&self, hash: &str) -> io::Result<PathBuf> {
         if !hash.bytes().all(|b| b.is_ascii_hexdigit()) || hash.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid hash: {hash}")));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid hash: {hash}"),
+            ));
         }
         Ok(self.blobs_dir.join(hash))
     }
@@ -61,7 +63,10 @@ impl BlobStore {
     /// Returns an error if the prefix is ambiguous (matches multiple blobs) or not found.
     pub fn resolve_prefix(&self, prefix: &str) -> io::Result<String> {
         if !prefix.bytes().all(|b| b.is_ascii_hexdigit()) || prefix.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid hash prefix: {prefix}")));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid hash prefix: {prefix}"),
+            ));
         }
         // If it's already a full hash and exists, return it directly
         let full_path = self.blobs_dir.join(prefix);
@@ -78,9 +83,15 @@ impl BlobStore {
             }
         }
         match matches.len() {
-            0 => Err(io::Error::new(io::ErrorKind::NotFound, format!("no blob matching prefix: {prefix}"))),
+            0 => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no blob matching prefix: {prefix}"),
+            )),
             1 => Ok(matches.into_iter().next().unwrap()),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("ambiguous prefix {prefix}: {} matches", matches.len()))),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("ambiguous prefix {prefix}: {} matches", matches.len()),
+            )),
         }
     }
 }
@@ -125,7 +136,9 @@ mod tests {
     #[test]
     fn has_blob_false_for_missing() {
         let (_dir, store) = setup();
-        assert!(!store.has_blob("0000000000000000000000000000000000000000000000000000000000000000"));
+        assert!(
+            !store.has_blob("0000000000000000000000000000000000000000000000000000000000000000")
+        );
     }
 
     #[test]
@@ -156,7 +169,10 @@ mod tests {
         let content = b"hello world this is some content to compress";
         let hash = store.store_blob(content).unwrap();
         let raw = fs::read(store.blob_path(&hash).unwrap()).unwrap();
-        assert!(raw.starts_with(&ZSTD_MAGIC), "blob should be zstd-compressed on disk");
+        assert!(
+            raw.starts_with(&ZSTD_MAGIC),
+            "blob should be zstd-compressed on disk"
+        );
         // Roundtrip still works
         assert_eq!(store.read_blob(&hash).unwrap(), content);
     }

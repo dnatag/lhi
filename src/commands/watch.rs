@@ -5,8 +5,19 @@ use crate::watcher;
 
 /// Starts watching a directory for file changes (blocking).
 pub fn watch(path: &Path, verbose: bool) -> Result<()> {
-    let mut w = watcher::LhiWatcher::new(path)?;
     let canon = path.canonicalize()?;
+    let mut w = match watcher::LhiWatcher::new(path) {
+        Ok(w) => w,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("another watcher is already running") {
+                // Silently exit — another watcher has it covered
+                eprintln!("lhi: {msg}");
+                return Ok(());
+            }
+            return Err(e);
+        }
+    };
     eprintln!("lhi: watching {}", canon.display());
 
     while let Some(event) = w.next_event() {
