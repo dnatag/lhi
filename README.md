@@ -6,9 +6,21 @@ Local history for your code — like IntelliJ's Local History, but for any edito
 
 ## Install
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew install dnatag/tap/lhi
+```
+
+### From source
+
 ```bash
 cargo install --path .
 ```
+
+### From GitHub releases
+
+Download the latest binary from [Releases](https://github.com/dnatag/lhi/releases), extract, and place in your `$PATH`.
 
 ## Quick start
 
@@ -114,7 +126,7 @@ Options:
 
 When git branch tracking is available, each entry shows the branch it was recorded on.
 
-With `--follow`, prints existing history then polls for new index entries every 500ms. Combines with `--since`, `--branch`, and file filters. Ctrl+C to stop.
+With `--follow`, prints existing history then polls for new index entries every 500ms. Combines with `--since`, `--branch`, and file filters. Press `q` to stop (or Ctrl+C).
 
 ### `lhi cat <TARGET> [~N]`
 

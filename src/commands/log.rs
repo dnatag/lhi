@@ -96,43 +96,98 @@ pub fn log(
     Ok(())
 }
 
-/// Polls the index for new entries and prints them as they appear.
-fn tail_index(index: &Index, file: Option<&str>, branch: Option<&str>) -> Result<()> {
-    use std::io::{BufRead, Seek, Write};
-    let path = index.path();
-    let mut offset = path.metadata().map(|m| m.len()).unwrap_or(0);
-    loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let len = path.metadata().map(|m| m.len()).unwrap_or(0);
-        if len <= offset {
+/// Reads new index entries appended after `offset`, filtered by file and branch.
+/// Returns matching entries and the new offset.
+fn read_new_entries(
+    path: &std::path::Path,
+    offset: u64,
+    file: Option<&str>,
+    branch: Option<&str>,
+) -> Result<(Vec<IndexEntry>, u64)> {
+    use std::io::{BufRead, Seek};
+
+    let len = path.metadata().map(|m| m.len()).unwrap_or(0);
+    if len <= offset {
+        return Ok((vec![], offset));
+    }
+    let mut f = std::fs::File::open(path)?;
+    f.seek(std::io::SeekFrom::Start(offset))?;
+    let reader = std::io::BufReader::new(f);
+    let mut results = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.is_empty() {
             continue;
         }
-        let mut f = std::fs::File::open(path)?;
-        f.seek(std::io::SeekFrom::Start(offset))?;
-        let reader = std::io::BufReader::new(f);
-        for line in reader.lines() {
-            let line = line?;
-            if line.is_empty() {
-                continue;
+        let e: IndexEntry = match serde_json::from_str(&line) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if let Some(fi) = file
+            && e.relative_path != fi
+        {
+            continue;
+        }
+        if let Some(b) = branch
+            && e.git_branch.as_deref() != Some(b)
+        {
+            continue;
+        }
+        results.push(e);
+    }
+    Ok((results, len))
+}
+
+/// Polls the index for new entries and prints them as they appear.
+fn tail_index(index: &Index, file: Option<&str>, branch: Option<&str>) -> Result<()> {
+    use std::io::{IsTerminal, Write};
+    use std::sync::mpsc;
+
+    struct RawGuard;
+    impl Drop for RawGuard {
+        fn drop(&mut self) {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+    }
+
+    let path = index.path();
+    let mut offset = path.metadata().map(|m| m.len()).unwrap_or(0);
+
+    let _guard = if std::io::stdin().is_terminal() {
+        crossterm::terminal::enable_raw_mode()?;
+        Some(RawGuard)
+    } else {
+        None
+    };
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        loop {
+            if crossterm::event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
+                if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+                    if key.code == crossterm::event::KeyCode::Char('q')
+                        || key.code == crossterm::event::KeyCode::Char('Q')
+                    {
+                        let _ = tx.send(());
+                        return;
+                    }
+                }
             }
-            let e: IndexEntry = match serde_json::from_str(&line) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if let Some(fi) = file
-                && e.relative_path != fi
-            {
-                continue;
-            }
-            if let Some(b) = branch
-                && e.git_branch.as_deref() != Some(b)
-            {
-                continue;
-            }
-            println!("{}", format_entry(&e, false, 0));
+        }
+    });
+
+    eprintln!("Following index... (press q to quit)\r");
+    loop {
+        if rx.try_recv().is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let (entries, new_offset) = read_new_entries(path, offset, file, branch)?;
+        for e in &entries {
+            print!("{}\r\n", format_entry(e, false, 0));
             std::io::stdout().flush()?;
         }
-        offset = len;
+        offset = new_offset;
     }
 }
 
@@ -204,5 +259,73 @@ mod tests {
         // With branch filter — should return none (git_branch is None)
         entries.retain(|e| e.git_branch.as_deref() == Some("main"));
         assert_eq!(entries.len(), 0);
+    }
+
+    #[test]
+    fn read_new_entries_picks_up_appended_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        index.append(&entry("a.rs", ts, None)).unwrap();
+
+        let path = index.path();
+        let offset = path.metadata().unwrap().len();
+
+        // Append a new entry after the offset
+        let ts2 = Utc.with_ymd_and_hms(2026, 3, 14, 11, 0, 0).unwrap();
+        index.append(&entry("b.rs", ts2, None)).unwrap();
+
+        let (entries, new_offset) = super::read_new_entries(path, offset, None, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].relative_path, "b.rs");
+        assert!(new_offset > offset);
+    }
+
+    #[test]
+    fn read_new_entries_no_change_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        index.append(&entry("a.rs", ts, None)).unwrap();
+
+        let path = index.path();
+        let offset = path.metadata().unwrap().len();
+
+        let (entries, new_offset) = super::read_new_entries(path, offset, None, None).unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(new_offset, offset);
+    }
+
+    #[test]
+    fn read_new_entries_filters_by_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let path = index.path();
+        let offset = path.metadata().map(|m| m.len()).unwrap_or(0);
+
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        index.append(&entry("a.rs", ts, None)).unwrap();
+        index.append(&entry("b.rs", ts, None)).unwrap();
+
+        let (entries, _) = super::read_new_entries(path, offset, Some("a.rs"), None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].relative_path, "a.rs");
+    }
+
+    #[test]
+    fn read_new_entries_filters_by_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let path = index.path();
+        let offset = path.metadata().map(|m| m.len()).unwrap_or(0);
+
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        index.append(&entry("a.rs", ts, Some("main"))).unwrap();
+        index.append(&entry("b.rs", ts, Some("dev"))).unwrap();
+        index.append(&entry("c.rs", ts, None)).unwrap();
+
+        let (entries, _) = super::read_new_entries(path, offset, None, Some("main")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].relative_path, "a.rs");
     }
 }

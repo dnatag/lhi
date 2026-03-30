@@ -51,9 +51,12 @@ Options:
   --since <DURATION>  Filter by time (e.g. 5m, 1h, 2d)
   --branch <NAME>     Filter by git branch
   --json              Output as JSON
+  -f, --follow        Continuously watch for new entries (like tail -f)
 ```
 
 When git branch tracking is available, each entry shows the branch it was recorded on.
+
+With `--follow`, prints existing history then polls for new index entries every 500ms. Combines with `--since`, `--branch`, and file filters. Press `q` to stop (or Ctrl+C).
 
 ## `lhi cat <TARGET> [~N]`
 
