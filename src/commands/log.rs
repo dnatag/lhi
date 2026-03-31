@@ -163,15 +163,13 @@ fn tail_index(index: &Index, file: Option<&str>, branch: Option<&str>) -> Result
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         loop {
-            if crossterm::event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
-                if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
-                    if key.code == crossterm::event::KeyCode::Char('q')
-                        || key.code == crossterm::event::KeyCode::Char('Q')
-                    {
-                        let _ = tx.send(());
-                        return;
-                    }
-                }
+            if crossterm::event::poll(std::time::Duration::from_millis(100)).unwrap_or(false)
+                && let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read()
+                && (key.code == crossterm::event::KeyCode::Char('q')
+                    || key.code == crossterm::event::KeyCode::Char('Q'))
+            {
+                let _ = tx.send(());
+                return;
             }
         }
     });
