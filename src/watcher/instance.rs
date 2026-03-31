@@ -34,8 +34,19 @@ fn pid_path(root: &Path) -> PathBuf {
 }
 
 /// Returns true if a process with the given PID is alive.
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    use std::process::Command;
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
 }
 
 /// Check if another watcher is already running for this root.
@@ -83,11 +94,18 @@ pub fn kill_stale_watcher(root: &Path) -> anyhow::Result<Option<u32>> {
         }
     };
     if pid_alive(pid) {
+        #[cfg(unix)]
         unsafe {
             libc::kill(pid as i32, libc::SIGTERM);
         }
-        // Wait briefly for it to exit
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F"])
+                .output();
+        }
         std::thread::sleep(std::time::Duration::from_millis(100));
+        #[cfg(unix)]
         if pid_alive(pid) {
             unsafe {
                 libc::kill(pid as i32, libc::SIGKILL);
