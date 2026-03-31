@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -103,3 +105,21 @@ jobs:
           git add Formula/lhi.rb
           git commit -m "lhi ${GITHUB_REF_NAME}"
           git push
+
+  docs:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mdbook
+        run: |
+          curl -sSL https://github.com/rust-lang/mdBook/releases/latest/download/mdbook-v0.4.44-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv mdbook /usr/local/bin/
+      - run: mdbook build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc/book
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -4,6 +4,8 @@ Local history for your code — like IntelliJ's Local History, but for any edito
 
 `lhi` watches a directory for file changes and maintains a local version history. Every save is captured automatically with content-addressed storage and a JSONL index. No server, no network, no config — just a `.lhi/` directory at your project root.
 
+📖 **[Full documentation](https://dnatag.github.io/lhi/)**
+
 ## Install
 
 ### Homebrew (macOS/Linux)
