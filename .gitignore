@@ -204,3 +204,4 @@ cython_debug/
 
 # mdbook build output
 doc/book/
+.kiro
