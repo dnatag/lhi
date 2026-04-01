@@ -154,16 +154,11 @@ impl LhiWatcher {
 
         let relative_path = path.strip_prefix(&self.root).unwrap_or(path);
         let rel_str = relative_path.display().to_string();
-        let event_type_str = match &event_type {
-            EventType::Create => "create",
-            EventType::Modify => "modify",
-            EventType::Delete => "delete",
-            EventType::Rename => "rename",
-        };
+        let now = Utc::now();
 
         if let Err(e) = self.index.append(&IndexEntry {
-            timestamp: Utc::now(),
-            event_type: event_type_str.into(),
+            timestamp: now,
+            event_type: event_type.as_str().into(),
             path: path.display().to_string(),
             relative_path: rel_str.clone(),
             content_hash: snapshot.as_ref().map(|s| s.content_hash.clone()),
@@ -177,7 +172,7 @@ impl LhiWatcher {
 
         Some(LhiEvent {
             version: 1,
-            timestamp: Utc::now(),
+            timestamp: now,
             event_type,
             project: Project {
                 root: self.root.display().to_string(),

@@ -41,6 +41,9 @@ fn bash_hook() -> &'static str {
     r#"# lhi shell hook — auto-start watcher on cd into .lhi projects
 # eval "$(lhi activate)" in your .bashrc / .zshrc
 
+# Guard against re-activation (e.g. repeated source ~/.bashrc)
+if declare -f _lhi_hook >/dev/null 2>&1; then return 0 2>/dev/null || true; fi
+
 _LHI_WATCHERS=""
 touch "$HOME/.lhi-watch.log" 2>/dev/null
 
@@ -138,6 +141,9 @@ _lhi_hook
 fn zsh_hook() -> &'static str {
     r#"# lhi shell hook — auto-start watcher on cd into .lhi projects
 # eval "$(lhi activate)" in your .bashrc / .zshrc
+
+# Guard against re-activation (e.g. repeated source ~/.zshrc)
+if declare -f _lhi_hook >/dev/null 2>&1; then return 0 2>/dev/null || true; fi
 
 typeset -A _LHI_PIDS
 touch "$HOME/.lhi-watch.log" 2>/dev/null

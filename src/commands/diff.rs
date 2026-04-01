@@ -109,7 +109,7 @@ fn resolve_diff_args(
             }
         }
         // diff <file> — implicit ~1 vs disk
-        (None, None) | (None, Some(_)) => {
+        (None, None) => {
             if arg1.bytes().all(|b| b.is_ascii_hexdigit()) && !arg1.is_empty() {
                 bail!("diff requires two hashes or a file with revision(s)");
             }
@@ -120,6 +120,7 @@ fn resolve_diff_args(
                 .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", arg1))?;
             Ok((t1, t2, arg1.to_string()))
         }
+        (None, Some(_)) => bail!("unexpected: arg3 without arg2"),
     }
 }
 

@@ -176,14 +176,13 @@ impl LhiWatcher {
                 continue;
             }
             let relative = path.strip_prefix(root).unwrap_or(path);
-            let rel_str = relative.display().to_string();
-            if rel_str.starts_with(".lhi")
-                || rel_str.contains("/.lhi")
-                || rel_str.starts_with(".git")
-                || rel_str.contains("/.git")
+            if relative
+                .components()
+                .any(|c| c.as_os_str() == ".lhi" || c.as_os_str() == ".git")
             {
                 continue;
             }
+            let rel_str = relative.display().to_string();
             let meta = match path.metadata() {
                 Ok(m) => m,
                 Err(e) => {

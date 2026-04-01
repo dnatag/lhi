@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::IsTerminal;
 
 use anyhow::Result;
@@ -10,13 +11,17 @@ use crate::store::BlobStore;
 
 /// Searches blob contents for a query string.
 /// Shows syntax-highlighted context around matches when stdout is a terminal.
+///
+/// Each unique blob is searched only once (deduped by content hash). When the same
+/// content appears under multiple filenames, the most recent index entry's filename
+/// is shown (since entries are iterated in reverse chronological order).
 pub fn search(query: &str, file: Option<&str>) -> Result<()> {
     let root = std::env::current_dir()?;
     let index = Index::open(&root)?;
     let store = BlobStore::init(&root)?;
     let entries = index.read_all()?;
 
-    let mut seen_hashes = std::collections::HashSet::new();
+    let mut seen_hashes = HashSet::new();
     let mut matches = 0;
     let query_lower = query.to_lowercase();
     let color = std::io::stdout().is_terminal();
@@ -98,6 +103,8 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use crate::index::{Index, IndexEntry};
     use crate::store::BlobStore;
     use chrono::{TimeZone, Utc};
@@ -149,7 +156,7 @@ mod tests {
             .unwrap();
 
         let entries = index.read_all().unwrap();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut matched_files = Vec::new();
         for entry in entries.iter().rev() {
             let hash = entry.content_hash.as_ref().unwrap();
@@ -204,7 +211,7 @@ mod tests {
             .unwrap();
 
         let entries = index.read_all().unwrap();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut search_count = 0;
         for entry in entries.iter().rev() {
             let hash = entry.content_hash.as_ref().unwrap();

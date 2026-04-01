@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -49,6 +50,7 @@ impl Index {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         writeln!(writer, "{}", line)?;
         writer.flush()?;
+        drop(writer);
         file.unlock()?;
         Ok(())
     }
@@ -89,8 +91,7 @@ impl Index {
     /// Returns the latest snapshot for each file at or before the given timestamp.
     pub fn state_at(&self, before: DateTime<Utc>) -> io::Result<Vec<IndexEntry>> {
         let entries = self.read_all()?;
-        let mut latest: std::collections::HashMap<String, IndexEntry> =
-            std::collections::HashMap::new();
+        let mut latest: HashMap<String, IndexEntry> = HashMap::new();
         for entry in entries {
             if entry.timestamp <= before {
                 latest.insert(entry.relative_path.clone(), entry);
@@ -102,7 +103,7 @@ impl Index {
     }
 
     /// Returns all unique relative paths ever recorded in the index.
-    pub fn all_known_paths(&self) -> io::Result<std::collections::HashSet<String>> {
+    pub fn all_known_paths(&self) -> io::Result<HashSet<String>> {
         Ok(self
             .read_all()?
             .into_iter()
@@ -115,8 +116,7 @@ impl Index {
     /// Returns the number of entries after dedup.
     pub fn dedup(&self) -> io::Result<usize> {
         let entries = self.read_all()?;
-        let mut last_hash: std::collections::HashMap<String, Option<String>> =
-            std::collections::HashMap::new();
+        let mut last_hash: HashMap<String, Option<String>> = HashMap::new();
         let deduped: Vec<_> = entries
             .into_iter()
             .filter(|e| {
@@ -132,8 +132,7 @@ impl Index {
     /// Compact the index: keep only the latest entry per file.
     pub fn compact(&self) -> io::Result<usize> {
         let entries = self.read_all()?;
-        let mut latest: std::collections::HashMap<String, IndexEntry> =
-            std::collections::HashMap::new();
+        let mut latest: HashMap<String, IndexEntry> = HashMap::new();
         for entry in entries {
             latest.insert(entry.relative_path.clone(), entry);
         }
@@ -147,6 +146,12 @@ impl Index {
 
     /// Atomically rewrite the index with the given entries.
     fn rewrite(&self, entries: &[IndexEntry]) -> io::Result<usize> {
+        use fs2::FileExt;
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        lock_file.lock_exclusive()?;
         let tmp = self.path.with_extension("jsonl.tmp");
         {
             let mut file = fs::File::create(&tmp)?;
@@ -157,6 +162,7 @@ impl Index {
             }
         }
         fs::rename(&tmp, &self.path)?;
+        lock_file.unlock()?;
         Ok(entries.len())
     }
 }

@@ -6,7 +6,7 @@ use crate::watcher;
 /// Starts watching a directory for file changes (blocking).
 pub fn watch(path: &Path, verbose: bool) -> Result<()> {
     let canon = path.canonicalize()?;
-    let mut w = match watcher::LhiWatcher::new(path) {
+    let mut w = match watcher::LhiWatcher::new(&canon) {
         Ok(w) => w,
         Err(e) => {
             let msg = e.to_string();

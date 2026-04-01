@@ -28,7 +28,7 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
         }
         let relative = path.strip_prefix(&root).unwrap_or(path);
         let rel_str = relative.display().to_string();
-        if rel_str.starts_with(".lhi") {
+        if rel_str.starts_with(".lhi") || rel_str.starts_with(".git") {
             continue;
         }
         let meta = match fs::metadata(path) {

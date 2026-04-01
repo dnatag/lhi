@@ -10,6 +10,17 @@ pub enum EventType {
     Rename,
 }
 
+impl EventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Modify => "modify",
+            Self::Delete => "delete",
+            Self::Rename => "rename",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub root: String,

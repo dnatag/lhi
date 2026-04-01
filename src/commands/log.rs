@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::Local;
 
@@ -73,13 +75,11 @@ pub fn log(
         println!("No history found.");
     } else {
         // Compute per-file revision numbers (~1 = newest)
-        let mut file_counts: std::collections::HashMap<&str, usize> =
-            std::collections::HashMap::new();
+        let mut file_counts: HashMap<&str, usize> = HashMap::new();
         for e in &entries {
             *file_counts.entry(&e.relative_path).or_insert(0) += 1;
         }
-        let mut file_seen: std::collections::HashMap<&str, usize> =
-            std::collections::HashMap::new();
+        let mut file_seen: HashMap<&str, usize> = HashMap::new();
         for e in &entries {
             let seen = file_seen.entry(&e.relative_path).or_insert(0);
             *seen += 1;

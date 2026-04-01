@@ -25,7 +25,10 @@ impl BlobStore {
             let compressed = zstd::encode_all(content, 3).map_err(io::Error::other)?;
             let tmp = path.with_extension("tmp");
             fs::write(&tmp, &compressed)?;
-            fs::rename(&tmp, &path)?;
+            if let Err(e) = fs::rename(&tmp, &path) {
+                let _ = fs::remove_file(&tmp);
+                return Err(e);
+            }
         }
         Ok(hash)
     }
@@ -80,6 +83,12 @@ impl BlobStore {
             let name = name.to_string_lossy();
             if name.starts_with(prefix) {
                 matches.push(name.into_owned());
+                if matches.len() > 1 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("ambiguous prefix {prefix}: {} matches", matches.len()),
+                    ));
+                }
             }
         }
         match matches.len() {
@@ -241,5 +250,15 @@ mod tests {
             let err = result.unwrap_err().to_string();
             assert!(err.contains("ambiguous"));
         }
+    }
+
+    #[test]
+    fn store_and_read_empty_blob() {
+        let (_dir, store) = setup();
+        let hash = store.store_blob(b"").unwrap();
+        assert_eq!(hash.len(), 64);
+        let back = store.read_blob(&hash).unwrap();
+        assert!(back.is_empty());
+        assert!(store.has_blob(&hash));
     }
 }

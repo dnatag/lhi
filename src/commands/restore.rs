@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::{Result, bail};
 use std::fs;
 use std::path::Path;
@@ -99,7 +101,7 @@ fn restore_single_file(
         let verb = if dry_run {
             "would restore"
         } else {
-            "will restore"
+            "restoring"
         };
         println!("{verb} {} (hash: {})", file, hash.get(..8).unwrap_or(hash));
     }
@@ -125,7 +127,7 @@ fn restore_to_state(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let snapshot_paths: std::collections::HashSet<String> =
+    let snapshot_paths: HashSet<String> =
         state.iter().map(|e| e.relative_path.clone()).collect();
 
     let mut actions: Vec<RestoreAction> = state
@@ -226,10 +228,7 @@ fn to_restore_action(root: &Path, entry: &IndexEntry) -> Option<RestoreAction> {
     }
     let hash = entry.content_hash.as_ref()?;
     let needs_restore = match fs::read(&target).ok() {
-        Some(bytes) => {
-            use sha2::{Digest, Sha256};
-            format!("{:x}", Sha256::new_with_prefix(&bytes).finalize()) != *hash
-        }
+        Some(bytes) => crate::util::hex_sha256(&bytes) != *hash,
         None => true,
     };
     needs_restore.then(|| RestoreAction {
@@ -375,7 +374,7 @@ mod tests {
 
         let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
         let state = index.state_at(cutoff).unwrap();
-        let snapshot_paths: std::collections::HashSet<String> =
+        let snapshot_paths: HashSet<String> =
             state.iter().map(|e| e.relative_path.clone()).collect();
         let all_known = index.all_known_paths().unwrap();
         for rel in &all_known {
@@ -410,7 +409,7 @@ mod tests {
 
         let cutoff = parse_before("2026-03-14T10:30:00Z").unwrap();
         let state = index.state_at(cutoff).unwrap();
-        let snapshot_paths: std::collections::HashSet<String> =
+        let snapshot_paths: HashSet<String> =
             state.iter().map(|e| e.relative_path.clone()).collect();
 
         // With --file filter, should still produce a delete action
@@ -533,5 +532,36 @@ mod tests {
         let at: Option<&str> = None;
         let before: Option<&str> = None;
         assert!(file.is_none() && rev.is_none() && at.is_none() && before.is_none());
+    }
+
+    #[test]
+    fn restore_at_hash_restores_to_that_moment() {
+        let dir = setup_project();
+        // Break both files
+        fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "BROKEN").unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        // Get the v1 hash for main.rs (recorded at t1=10:00)
+        let entries = index.query_file("src/main.rs").unwrap();
+        let h1 = entries[0].content_hash.as_ref().unwrap();
+        // Use --at logic: find the timestamp for this hash, then state_at
+        let all = index.read_all().unwrap();
+        let entry = all
+            .iter()
+            .find(|e| e.content_hash.as_deref() == Some(h1))
+            .unwrap();
+        let cutoff = entry.timestamp;
+        let state = index.state_at(cutoff).unwrap();
+        restore_to_state(dir.path(), &index, &store, &state, false, false).unwrap();
+        // At t1 (10:00), main.rs was v1 and lib.rs was created
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "fn main() { v1 }"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
+            "pub fn lib() {}"
+        );
     }
 }
