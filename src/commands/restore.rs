@@ -127,8 +127,7 @@ fn restore_to_state(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let snapshot_paths: HashSet<String> =
-        state.iter().map(|e| e.relative_path.clone()).collect();
+    let snapshot_paths: HashSet<String> = state.iter().map(|e| e.relative_path.clone()).collect();
 
     let mut actions: Vec<RestoreAction> = state
         .iter()

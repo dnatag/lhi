@@ -16,8 +16,7 @@ pub fn info() -> Result<()> {
 
     let index = Index::open(&root)?;
     let entries = index.read_all()?;
-    let unique_files: HashSet<_> =
-        entries.iter().map(|e| &e.relative_path).collect();
+    let unique_files: HashSet<_> = entries.iter().map(|e| &e.relative_path).collect();
 
     let blobs_dir = lhi_dir.join("blobs");
     let (blob_count, blob_size) = if blobs_dir.exists() {
@@ -139,8 +138,7 @@ mod tests {
         }
 
         let entries = index.read_all().unwrap();
-        let unique_files: HashSet<_> =
-            entries.iter().map(|e| &e.relative_path).collect();
+        let unique_files: HashSet<_> = entries.iter().map(|e| &e.relative_path).collect();
         let blobs_dir = dir.path().join(".lhi/blobs");
         let blob_count = fs::read_dir(&blobs_dir).unwrap().count();
 
