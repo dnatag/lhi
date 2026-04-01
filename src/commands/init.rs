@@ -58,7 +58,13 @@ fn spawn_watcher(root: &Path) {
     // $HOME is always available on Unix (the only platform with shell hook support)
     let stderr = std::env::var_os("HOME")
         .map(|h| Path::new(&h).join(".lhi-watch.log"))
-        .and_then(|p| fs::OpenOptions::new().create(true).append(true).open(p).ok())
+        .and_then(|p| {
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .ok()
+        })
         .map(Stdio::from)
         .unwrap_or_else(Stdio::null);
 
