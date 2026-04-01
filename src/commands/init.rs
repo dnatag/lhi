@@ -1,20 +1,23 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use anyhow::Result;
 
 /// Initializes a `.lhi/` directory in the given path and adds `.lhi/` to `.gitignore` if present.
+/// Starts a background watcher and prints shell hook guidance.
 pub fn init(path: &Path) -> Result<()> {
     let root = path.canonicalize()?;
     let lhi_dir = root.join(".lhi");
+    let fresh = !lhi_dir.exists();
 
-    if lhi_dir.exists() {
+    if fresh {
+        fs::create_dir_all(lhi_dir.join("blobs"))?;
+        eprintln!("lhi: initialized {}", root.display());
+    } else {
         eprintln!("lhi: already initialized at {}", root.display());
-        return Ok(());
     }
-
-    fs::create_dir_all(lhi_dir.join("blobs"))?;
-    eprintln!("lhi: initialized {}", root.display());
 
     // Add .lhi/ to .gitignore if it exists and doesn't already contain it
     let gitignore = root.join(".gitignore");
@@ -24,7 +27,6 @@ pub fn init(path: &Path) -> Result<()> {
             .lines()
             .any(|l| l.trim() == ".lhi/" || l.trim() == ".lhi")
         {
-            use std::io::Write;
             let mut f = fs::OpenOptions::new().append(true).open(&gitignore)?;
             if !content.ends_with('\n') && !content.is_empty() {
                 writeln!(f)?;
@@ -34,7 +36,42 @@ pub fn init(path: &Path) -> Result<()> {
         }
     }
 
+    // Start background watcher (PID lock prevents duplicates)
+    spawn_watcher(&root);
+
+    if fresh {
+        eprintln!();
+        eprintln!("To auto-start watching in future shell sessions, add to your shell rc:");
+        eprintln!("  eval \"$(lhi activate)\"");
+    }
+
     Ok(())
+}
+
+/// Spawns `lhi watch` in the background, detached from the current process.
+/// Silently does nothing if the watcher fails to start (e.g. already running).
+fn spawn_watcher(root: &Path) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+
+    // $HOME is always available on Unix (the only platform with shell hook support)
+    let stderr = std::env::var_os("HOME")
+        .map(|h| Path::new(&h).join(".lhi-watch.log"))
+        .and_then(|p| fs::OpenOptions::new().create(true).append(true).open(p).ok())
+        .map(Stdio::from)
+        .unwrap_or_else(Stdio::null);
+
+    if Command::new(exe)
+        .args(["watch", &root.display().to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr)
+        .spawn()
+        .is_ok()
+    {
+        eprintln!("lhi: watching for changes");
+    }
 }
 
 #[cfg(test)]
@@ -91,5 +128,16 @@ mod tests {
         super::init(dir.path()).unwrap();
         let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert!(content.contains("target/\n.lhi/\n"));
+    }
+
+    #[test]
+    fn reinit_adds_gitignore_entry_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".lhi/blobs")).unwrap();
+        fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+        // Re-init on existing .lhi/ should still fix gitignore
+        super::init(dir.path()).unwrap();
+        let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(content.contains(".lhi/"));
     }
 }
