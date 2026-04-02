@@ -14,10 +14,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
+            use-cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
@@ -32,15 +33,21 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.use-cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
 
       - name: Package (unix)
         if: runner.os != 'Windows'
@@ -87,8 +94,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           SHA_AARCH64_DARWIN=$(sha256sum artifacts/lhi-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
           SHA_X86_64_DARWIN=$(sha256sum artifacts/lhi-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
-          SHA_AARCH64_LINUX=$(sha256sum artifacts/lhi-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
-          SHA_X86_64_LINUX=$(sha256sum artifacts/lhi-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+          SHA_AARCH64_LINUX=$(sha256sum artifacts/lhi-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_X86_64_LINUX=$(sha256sum artifacts/lhi-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
 
           sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/lhi.rb
 
