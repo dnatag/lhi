@@ -1,6 +1,6 @@
 [package]
 name = "lhi"
-version = "1.0.5"
+version = "1.0.7"
 edition = "2024"
 
 [dependencies]
