@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -25,6 +25,7 @@ pub struct LhiWatcher {
     _watcher: notify::RecommendedWatcher,
     pub(super) rx: mpsc::Receiver<notify::Result<Event>>,
     pub(super) pending: HashMap<PathBuf, (notify::EventKind, std::time::Instant)>,
+    pub(super) ready_queue: VecDeque<crate::event::LhiEvent>,
     /// Held for the lifetime of the watcher to prevent duplicates.
     _lock_file: fs::File,
 }
@@ -45,7 +46,17 @@ fn pid_alive(pid: u32) -> bool {
     Command::new("tasklist")
         .args(["/FI", &format!("PID eq {pid}"), "/NH"])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            // tasklist /NH columns: ImageName PID SessionName Session# MemUsage
+            // Parse PID from the second whitespace-delimited field of each line
+            out.lines().any(|line| {
+                line.split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse::<u32>().ok())
+                    == Some(pid)
+            })
+        })
         .unwrap_or(false)
 }
 
@@ -80,6 +91,8 @@ fn acquire_pid_lock(root: &Path) -> anyhow::Result<fs::File> {
 /// Kill a stale watcher for the given root, if one exists.
 /// Returns Ok(Some(pid)) if a process was killed, Ok(None) if no stale watcher found.
 pub fn kill_stale_watcher(root: &Path) -> anyhow::Result<Option<u32>> {
+    use fs2::FileExt;
+
     let root = root.canonicalize()?;
     let path = pid_path(&root);
     let content = match fs::read_to_string(&path) {
@@ -93,6 +106,22 @@ pub fn kill_stale_watcher(root: &Path) -> anyhow::Result<Option<u32>> {
             return Ok(None);
         }
     };
+
+    // Try acquiring the lock to determine if the watcher is actually alive.
+    // If we get the lock, the watcher is dead — just clean up the stale PID file.
+    // If we can't get the lock, the watcher is alive — kill it.
+    let lock_result = fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .and_then(|f| f.try_lock_exclusive().map(|_| f));
+
+    if lock_result.is_ok() {
+        // Lock succeeded — watcher is dead, just clean up
+        let _ = fs::remove_file(&path);
+        return Ok(None);
+    }
+
+    // Lock failed — watcher is alive, kill it
     if pid_alive(pid) {
         #[cfg(unix)]
         unsafe {
@@ -151,6 +180,7 @@ impl LhiWatcher {
             _watcher: watcher,
             rx,
             pending: HashMap::new(),
+            ready_queue: VecDeque::new(),
             _lock_file,
         })
     }
@@ -166,6 +196,7 @@ impl LhiWatcher {
         if !index.read_all()?.is_empty() {
             return Ok(());
         }
+        let mut batch = Vec::new();
         for entry in ignore::WalkBuilder::new(root)
             .hidden(false)
             .build()
@@ -208,7 +239,7 @@ impl LhiWatcher {
                 }
             };
             let file_mode = helpers::get_file_mode(&meta);
-            index.append(&IndexEntry {
+            batch.push(IndexEntry {
                 timestamp: Utc::now(),
                 event_type: "snapshot".into(),
                 path: path.display().to_string(),
@@ -218,8 +249,9 @@ impl LhiWatcher {
                 label: Some("baseline".into()),
                 file_mode,
                 git_branch: git_branch.clone(),
-            })?;
+            });
         }
+        index.append_batch(&batch)?;
         Ok(())
     }
 }
@@ -435,9 +467,14 @@ mod tests {
         let window = Duration::from_millis(DEBOUNCE_MS);
 
         loop {
+            if let Some(ev) = watcher.ready_queue.pop_front() {
+                return Some(ev);
+            }
+
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return watcher.flush_pending();
+                watcher.flush_pending();
+                return watcher.ready_queue.pop_front();
             }
 
             let wait = watcher
@@ -466,13 +503,12 @@ mod tests {
                 Ok(Err(_)) => return None,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return watcher.flush_pending();
+                    watcher.flush_pending();
+                    return watcher.ready_queue.pop_front();
                 }
             }
 
-            if let Some(e) = watcher.flush_pending() {
-                return Some(e);
-            }
+            watcher.flush_pending();
         }
     }
 

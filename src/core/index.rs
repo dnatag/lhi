@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
@@ -23,6 +24,7 @@ pub struct IndexEntry {
 
 pub struct Index {
     path: PathBuf,
+    cache: RefCell<Option<Vec<IndexEntry>>>,
 }
 
 impl Index {
@@ -31,11 +33,16 @@ impl Index {
         fs::create_dir_all(&dir)?;
         Ok(Self {
             path: dir.join("index.jsonl"),
+            cache: RefCell::new(None),
         })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn invalidate_cache(&self) {
+        *self.cache.borrow_mut() = None;
     }
 
     pub fn append(&self, entry: &IndexEntry) -> io::Result<()> {
@@ -52,10 +59,43 @@ impl Index {
         writer.flush()?;
         drop(writer);
         file.unlock()?;
+        self.invalidate_cache();
+        Ok(())
+    }
+
+    pub fn append_batch(&self, entries: &[IndexEntry]) -> io::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        use fs2::FileExt;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        file.lock_exclusive()?;
+        let mut writer = io::BufWriter::new(&file);
+        for entry in entries {
+            let line = serde_json::to_string(entry)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            writeln!(writer, "{}", line)?;
+        }
+        writer.flush()?;
+        drop(writer);
+        file.unlock()?;
+        self.invalidate_cache();
         Ok(())
     }
 
     pub fn read_all(&self) -> io::Result<Vec<IndexEntry>> {
+        if let Some(cached) = self.cache.borrow().as_ref() {
+            return Ok(cached.clone());
+        }
+        let entries = self.read_all_uncached()?;
+        *self.cache.borrow_mut() = Some(entries.clone());
+        Ok(entries)
+    }
+
+    fn read_all_uncached(&self) -> io::Result<Vec<IndexEntry>> {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
@@ -111,11 +151,17 @@ impl Index {
             .collect())
     }
 
+    /// Returns all unique relative paths from a pre-loaded set of entries.
+    pub fn all_known_paths_from(entries: &[IndexEntry]) -> HashSet<&str> {
+        entries.iter().map(|e| e.relative_path.as_str()).collect()
+    }
+
     /// Remove consecutive duplicate entries for the same file with the same content hash.
     /// Preserves history order and all entries where content actually changed.
-    /// Returns the number of entries after dedup.
-    pub fn dedup(&self) -> io::Result<usize> {
+    /// Returns (before_count, after_count).
+    pub fn dedup(&self) -> io::Result<(usize, usize)> {
         let entries = self.read_all()?;
+        let before = entries.len();
         let mut last_hash: HashMap<String, Option<String>> = HashMap::new();
         let deduped: Vec<_> = entries
             .into_iter()
@@ -126,12 +172,15 @@ impl Index {
                 !dominated
             })
             .collect();
-        self.rewrite(&deduped)
+        let after = self.rewrite(&deduped)?;
+        Ok((before, after))
     }
 
     /// Compact the index: keep only the latest entry per file.
-    pub fn compact(&self) -> io::Result<usize> {
+    /// Returns (before_count, after_count).
+    pub fn compact(&self) -> io::Result<(usize, usize)> {
         let entries = self.read_all()?;
+        let before = entries.len();
         let mut latest: HashMap<String, IndexEntry> = HashMap::new();
         for entry in entries {
             latest.insert(entry.relative_path.clone(), entry);
@@ -141,7 +190,8 @@ impl Index {
             v.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
             v
         };
-        self.rewrite(&compacted)
+        let after = self.rewrite(&compacted)?;
+        Ok((before, after))
     }
 
     /// Atomically rewrite the index with the given entries.
@@ -163,6 +213,7 @@ impl Index {
         }
         fs::rename(&tmp, &self.path)?;
         lock_file.unlock()?;
+        self.invalidate_cache();
         Ok(entries.len())
     }
 }
@@ -327,7 +378,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(idx.read_all().unwrap().len(), 4);
-        assert_eq!(idx.dedup().unwrap(), 1);
+        assert_eq!(idx.dedup().unwrap(), (4, 1));
         assert_eq!(idx.read_all().unwrap().len(), 1);
     }
 
@@ -344,7 +395,7 @@ mod tests {
             .unwrap(); // dup
         idx.append(&make_entry("a.rs", "modify", Some("v2"), t3))
             .unwrap(); // real change
-        assert_eq!(idx.dedup().unwrap(), 2);
+        assert_eq!(idx.dedup().unwrap(), (3, 2));
         let entries = idx.read_all().unwrap();
         assert_eq!(entries[0].content_hash.as_deref(), Some("v1"));
         assert_eq!(entries[1].content_hash.as_deref(), Some("v2"));

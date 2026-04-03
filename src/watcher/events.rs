@@ -18,6 +18,11 @@ impl LhiWatcher {
     /// before retrying. Returns `None` if the watcher channel disconnects.
     pub fn next_event(&mut self) -> Option<LhiEvent> {
         loop {
+            // Return buffered events first
+            if let Some(ev) = self.ready_queue.pop_front() {
+                return Some(ev);
+            }
+
             let timeout = self
                 .pending
                 .values()
@@ -43,36 +48,33 @@ impl LhiWatcher {
                     }
                 }
                 Ok(Err(_)) => return None,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if let Some(lhi_event) = self.flush_pending() {
-                        return Some(lhi_event);
-                    }
-                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    return self.flush_pending();
+                    self.flush_pending();
+                    return self.ready_queue.pop_front();
                 }
             }
 
-            if let Some(lhi_event) = self.flush_pending() {
-                return Some(lhi_event);
-            }
+            self.flush_pending();
         }
     }
 
-    /// Checks pending events and returns the first one whose debounce window has elapsed.
-    pub(super) fn flush_pending(&mut self) -> Option<LhiEvent> {
+    /// Drains all pending events whose debounce window has elapsed into ready_queue.
+    pub(super) fn flush_pending(&mut self) {
         let window = Duration::from_millis(DEBOUNCE_MS);
-        let ready = self
+        let ready: Vec<_> = self
             .pending
             .iter()
-            .find(|(_, (_, t))| t.elapsed() >= window)
-            .map(|(p, (k, _))| (p.clone(), *k));
+            .filter(|(_, (_, t))| t.elapsed() >= window)
+            .map(|(p, (k, _))| (p.clone(), *k))
+            .collect();
 
-        if let Some((path, kind)) = ready {
+        for (path, kind) in ready {
             self.pending.remove(&path);
-            return self.build_event(&path, kind);
+            if let Some(ev) = self.build_event(&path, kind) {
+                self.ready_queue.push_back(ev);
+            }
         }
-        None
     }
 
     /// Constructs an `LhiEvent` from a raw filesystem notification.
@@ -93,9 +95,14 @@ impl LhiWatcher {
         let previous_hash = self.previous_hashes.get(path).cloned();
 
         let (snapshot, diff, file_mode) = if path.is_file() {
-            if let Ok(meta) = path.metadata()
-                && meta.len() > MAX_FILE_SIZE
-            {
+            let meta = match path.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("failed to stat {}: {e}", path.display());
+                    return None;
+                }
+            };
+            if meta.len() > MAX_FILE_SIZE {
                 eprintln!(
                     "lhi: skipping large file ({} bytes): {}",
                     meta.len(),
@@ -126,10 +133,7 @@ impl LhiWatcher {
                         });
                     self.previous_hashes
                         .insert(path.to_path_buf(), hash.clone());
-                    let mode = path
-                        .metadata()
-                        .ok()
-                        .and_then(|m| helpers::get_file_mode(&m));
+                    let mode = helpers::get_file_mode(&meta);
                     (
                         Some(Snapshot {
                             content_hash: hash,

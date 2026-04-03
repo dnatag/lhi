@@ -16,7 +16,7 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
     let label_str = label.unwrap_or("manual snapshot");
     let now = Utc::now();
     let branch = crate::util::current_git_branch(&root);
-    let mut count = 0;
+    let mut batch = Vec::new();
     for entry in ignore::WalkBuilder::new(&root)
         .hidden(false)
         .build()
@@ -27,10 +27,13 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
             continue;
         }
         let relative = path.strip_prefix(&root).unwrap_or(path);
-        let rel_str = relative.display().to_string();
-        if rel_str.starts_with(".lhi") || rel_str.starts_with(".git") {
+        if relative
+            .components()
+            .any(|c| c.as_os_str() == ".lhi" || c.as_os_str() == ".git")
+        {
             continue;
         }
+        let rel_str = relative.display().to_string();
         let meta = match fs::metadata(path) {
             Ok(m) => m,
             Err(e) => {
@@ -54,7 +57,7 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
             }
         };
         let hash = store.store_blob(&content)?;
-        index.append(&IndexEntry {
+        batch.push(IndexEntry {
             timestamp: now,
             event_type: "snapshot".into(),
             path: path.display().to_string(),
@@ -64,9 +67,10 @@ pub fn snapshot(label: Option<&str>) -> Result<()> {
             label: Some(label_str.into()),
             file_mode: get_file_mode(&meta),
             git_branch: branch.clone(),
-        })?;
-        count += 1;
+        });
     }
+    let count = batch.len();
+    index.append_batch(&batch)?;
     println!("Snapshot: {count} file(s) captured with label \"{label_str}\"");
     Ok(())
 }

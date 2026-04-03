@@ -110,7 +110,22 @@ fn restore_single_file(
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&target, content)?;
+        fs::write(&target, &content)?;
+        #[cfg(unix)]
+        {
+            // Find file_mode from the index entry matching this hash
+            let index = Index::open(root)?;
+            let file_mode = index
+                .read_all()?
+                .iter()
+                .rev()
+                .find(|e| e.content_hash.as_deref() == Some(hash) && e.relative_path == file)
+                .and_then(|e| e.file_mode);
+            if let Some(mode) = file_mode {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
+            }
+        }
         if !json {
             println!("Restored 1 file(s).");
         }
@@ -135,10 +150,12 @@ fn restore_to_state(
         .collect();
 
     // Delete files that didn't exist at the target time
-    for rel in &index.all_known_paths()? {
-        if !snapshot_paths.contains(rel) && root.join(rel).exists() {
+    let all_entries = index.read_all()?;
+    let known = Index::all_known_paths_from(&all_entries);
+    for rel in &known {
+        if !snapshot_paths.contains(*rel) && root.join(rel).exists() {
             actions.push(RestoreAction {
-                relative_path: rel.clone(),
+                relative_path: rel.to_string(),
                 action: "delete".into(),
                 hash: None,
                 file_mode: None,

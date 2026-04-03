@@ -70,7 +70,8 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
         if color {
             println!("--- {} ({short_hash}) {ts}", entry.relative_path);
             // Build line ranges: 2 lines of context around each match
-            let total_lines = text.lines().count();
+            let lines: Vec<&str> = text.lines().collect();
+            let total_lines = lines.len();
             let ranges: Vec<LineRange> = matching_lines
                 .iter()
                 .map(|&ln| LineRange::new(ln.saturating_sub(2).max(1), (ln + 2).min(total_lines)))
@@ -88,8 +89,9 @@ pub fn search(query: &str, file: Option<&str>) -> Result<()> {
             let _ = pp.print();
         } else {
             println!("--- {} ({short_hash}) {ts}", entry.relative_path);
+            let lines: Vec<&str> = text.lines().collect();
             for ln in &matching_lines {
-                let line = text.lines().nth(ln - 1).unwrap_or("");
+                let line = lines.get(ln - 1).unwrap_or(&"");
                 println!("  {ln}:{line}");
             }
         }

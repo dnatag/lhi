@@ -141,7 +141,8 @@ fn read_new_entries(
 /// Polls the index for new entries and prints them as they appear.
 fn tail_index(index: &Index, file: Option<&str>, branch: Option<&str>) -> Result<()> {
     use std::io::{IsTerminal, Write};
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     struct RawGuard;
     impl Drop for RawGuard {
@@ -152,31 +153,32 @@ fn tail_index(index: &Index, file: Option<&str>, branch: Option<&str>) -> Result
 
     let path = index.path();
     let mut offset = path.metadata().map(|m| m.len()).unwrap_or(0);
+    let stop = Arc::new(AtomicBool::new(false));
 
-    let _guard = if std::io::stdin().is_terminal() {
+    let is_tty = std::io::stdin().is_terminal();
+    let _guard = if is_tty {
         crossterm::terminal::enable_raw_mode()?;
+        let stop_clone = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop_clone.load(Ordering::Relaxed) {
+                if crossterm::event::poll(std::time::Duration::from_millis(100)).unwrap_or(false)
+                    && let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read()
+                    && (key.code == crossterm::event::KeyCode::Char('q')
+                        || key.code == crossterm::event::KeyCode::Char('Q'))
+                {
+                    stop_clone.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+        });
         Some(RawGuard)
     } else {
         None
     };
 
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        loop {
-            if crossterm::event::poll(std::time::Duration::from_millis(100)).unwrap_or(false)
-                && let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read()
-                && (key.code == crossterm::event::KeyCode::Char('q')
-                    || key.code == crossterm::event::KeyCode::Char('Q'))
-            {
-                let _ = tx.send(());
-                return;
-            }
-        }
-    });
-
     eprintln!("Following index... (press q to quit)\r");
     loop {
-        if rx.try_recv().is_ok() {
+        if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(500));

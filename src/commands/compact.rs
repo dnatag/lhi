@@ -6,12 +6,12 @@ use crate::index::Index;
 pub fn compact(dedup_only: bool) -> Result<()> {
     let root = std::env::current_dir()?;
     let index = Index::open(&root)?;
-    let before = index.read_all()?.len();
-    index.dedup()?;
-    if !dedup_only {
-        index.compact()?;
-    }
-    let after = index.read_all()?.len();
+    let (before, after_dedup) = index.dedup()?;
+    let after = if !dedup_only {
+        index.compact()?.1
+    } else {
+        after_dedup
+    };
     println!("Compacted index: {before} → {after} entries.");
     Ok(())
 }
@@ -43,7 +43,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(index.read_all().unwrap().len(), 2);
-        assert_eq!(index.compact().unwrap(), 1);
+        assert_eq!(index.compact().unwrap(), (2, 1));
         assert_eq!(
             index.read_all().unwrap()[0].content_hash.as_deref(),
             Some("v2")
@@ -76,7 +76,7 @@ mod tests {
         }
         assert_eq!(index.read_all().unwrap().len(), 4);
         // dedup_only: removes consecutive dups but keeps history
-        assert_eq!(index.dedup().unwrap(), 2);
+        assert_eq!(index.dedup().unwrap(), (4, 2));
         let entries = index.read_all().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].content_hash.as_deref(), Some("v1"));
