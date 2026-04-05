@@ -141,8 +141,8 @@ fn read_new_entries(
 /// Polls the index for new entries and prints them as they appear.
 fn tail_index(index: &Index, file: Option<&str>, branch: Option<&str>) -> Result<()> {
     use std::io::{IsTerminal, Write};
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct RawGuard;
     impl Drop for RawGuard {
