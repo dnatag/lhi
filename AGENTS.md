@@ -61,3 +61,4 @@ Watcher tests create real temp directories and filesystem events — they may be
 2. Add `mod <name>;` and `pub use <name>::<name>;` in `src/commands/mod.rs`
 3. Add a variant to `Command` enum in `src/bin/lhi/cli.rs`
 4. Add a match arm in `cli::run()`
+5. Update `README.md`, `doc/src/commands.md`, and `doc/src/quickstart.md`

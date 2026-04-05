@@ -61,6 +61,7 @@ lhi restore src/main.rs ~5           # restore single file to revision
 lhi restore --at a1b2c3d4            # restore project to that moment
 lhi restore --at a1b2c3d4 --dry-run  # preview first
 lhi restore --before 5m              # time-based restore
+lhi restore --snapshot "before refactor"  # restore to a named snapshot
 
 # Other commands
 lhi info                              # storage statistics
@@ -179,14 +180,16 @@ lhi restore src/main.rs ~5           # single file to revision
 lhi restore src/main.rs --at a1b2    # single file to specific hash
 lhi restore --at a1b2c3d4            # all files to that moment
 lhi restore --before 5m              # all files to 5 minutes ago
+lhi restore --snapshot "before refactor"  # restore to a named snapshot
 ```
 
 ```
 Options:
-  --at <HASH>    Restore to the moment a specific hash was recorded
-  --before <TIME>  Restore to before a time (5m, 1h, 14:30, ISO 8601)
-  --dry-run        Preview without making changes
-  --json           Output as JSON
+  --at <HASH>       Restore to the moment a specific hash was recorded
+  --before <TIME>   Restore to before a time (5m, 1h, 14:30, ISO 8601)
+  --snapshot <LABEL> Restore to a named snapshot (from lhi snapshot --label)
+  --dry-run          Preview without making changes
+  --json             Output as JSON
 ```
 
 Compares stored hashes against current disk state — only overwrites files that actually changed. Restores Unix file permissions. Deletes files that didn't exist at the target time.

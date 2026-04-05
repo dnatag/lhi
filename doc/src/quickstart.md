@@ -41,6 +41,7 @@ lhi search "TODO" --file src/lib.rs
 lhi restore src/main.rs ~5           # restore single file to revision
 lhi restore --at a1b2c3d4            # restore project to that moment
 lhi restore --at a1b2c3d4 --dry-run  # preview first
+lhi restore --snapshot "before refactor"  # restore to a named snapshot
 
 # Other commands
 lhi info                              # storage statistics

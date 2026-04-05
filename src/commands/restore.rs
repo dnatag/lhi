@@ -15,13 +15,16 @@ use super::{file_revision, parse_before, parse_rev};
 ///   restore <file> <~N>              — restore single file to revision N
 ///   restore <file> --at <hash>       — restore single file to a specific hash
 ///   restore --at <hash>              — restore all files to the moment that hash was recorded
-///   restore --before <time>          — restore all files to before a time (legacy)
-///   restore <file> --before <time>   — restore single file to before a time (legacy)
+///   restore --snapshot <label>       — restore all files to a named snapshot
+///   restore <file> --snapshot <label> — restore single file from a named snapshot
+///   restore --before <time>          — restore all files to before a time
+///   restore <file> --before <time>   — restore single file to before a time
 pub fn restore(
     file: Option<&str>,
     rev: Option<&str>,
     at: Option<&str>,
     before: Option<&str>,
+    snapshot: Option<&str>,
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
@@ -63,7 +66,36 @@ pub fn restore(
         );
     }
 
-    // Mode 3: --before <time> — legacy time-based restore
+    // Mode 3: --snapshot <label> — restore to a named snapshot
+    if let Some(label) = snapshot {
+        let entries = index.read_all()?;
+        let snap_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.event_type == "snapshot" && e.label.as_deref() == Some(label))
+            .collect();
+        let first = snap_entries
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("no snapshot found with label: {label}"))?;
+        let ts = first.timestamp;
+        // All entries from this snapshot share the same timestamp
+        let state: Vec<IndexEntry> = snap_entries.into_iter().cloned().collect();
+        if let Some(f) = file {
+            let filtered: Vec<_> = state.into_iter().filter(|e| e.relative_path == f).collect();
+            if filtered.is_empty() {
+                bail!("file {f} not found in snapshot \"{label}\"");
+            }
+            return restore_to_state(&root, &index, &store, &filtered, dry_run, json);
+        }
+        if !json {
+            println!(
+                "Restoring to snapshot \"{label}\" ({})",
+                ts.format("%Y-%m-%d %H:%M:%S UTC")
+            );
+        }
+        return restore_to_state(&root, &index, &store, &state, dry_run, json);
+    }
+
+    // Mode 4: --before <time> — legacy time-based restore
     if let Some(before_str) = before {
         let cutoff = parse_before(before_str)?;
         let state = index.state_at(cutoff)?;
@@ -74,7 +106,7 @@ pub fn restore(
         return restore_to_state(&root, &index, &store, &state, dry_run, json);
     }
 
-    bail!("specify a revision (~N), --at <hash>, or --before <time>")
+    bail!("specify a revision (~N), --at <hash>, --snapshot <label>, or --before <time>")
 }
 
 /// Restore a single file to a specific hash.
@@ -579,5 +611,100 @@ mod tests {
             fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
             "pub fn lib() {}"
         );
+    }
+
+    fn setup_snapshot_project() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let ts = Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap();
+        let h1 = store.store_blob(b"fn main() { snap }").unwrap();
+        let h2 = store.store_blob(b"pub fn lib() { snap }").unwrap();
+        for (rp, h, sz) in [("src/main.rs", &h1, 18u64), ("src/lib.rs", &h2, 21)] {
+            index
+                .append(&IndexEntry {
+                    timestamp: ts,
+                    event_type: "snapshot".into(),
+                    path: dir.path().join(rp).display().to_string(),
+                    relative_path: rp.into(),
+                    content_hash: Some(h.clone()),
+                    size_bytes: Some(sz),
+                    label: Some("my-snap".into()),
+                    file_mode: None,
+                    git_branch: None,
+                })
+                .unwrap();
+        }
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), "BROKEN").unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "BROKEN").unwrap();
+        dir
+    }
+
+    #[test]
+    fn restore_snapshot_restores_all_files() {
+        let dir = setup_snapshot_project();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let entries = index.read_all().unwrap();
+        let state: Vec<IndexEntry> = entries
+            .into_iter()
+            .filter(|e| e.event_type == "snapshot" && e.label.as_deref() == Some("my-snap"))
+            .collect();
+        restore_to_state(dir.path(), &index, &store, &state, false, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "fn main() { snap }"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/lib.rs")).unwrap(),
+            "pub fn lib() { snap }"
+        );
+    }
+
+    #[test]
+    fn restore_snapshot_missing_label_errors() {
+        let dir = setup_snapshot_project();
+        let index = Index::open(dir.path()).unwrap();
+        let entries = index.read_all().unwrap();
+        let state: Vec<&IndexEntry> = entries
+            .iter()
+            .filter(|e| e.event_type == "snapshot" && e.label.as_deref() == Some("nonexistent"))
+            .collect();
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn restore_snapshot_file_filter() {
+        let dir = setup_snapshot_project();
+        let index = Index::open(dir.path()).unwrap();
+        let store = BlobStore::init(dir.path()).unwrap();
+        let entries = index.read_all().unwrap();
+        let state: Vec<IndexEntry> = entries
+            .into_iter()
+            .filter(|e| e.event_type == "snapshot" && e.label.as_deref() == Some("my-snap"))
+            .filter(|e| e.relative_path == "src/main.rs")
+            .collect();
+        assert_eq!(state.len(), 1);
+        restore_to_state(dir.path(), &index, &store, &state, false, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "fn main() { snap }"
+        );
+        // lib.rs is deleted — restore_to_state removes known files not in the target state
+        assert!(!dir.path().join("src/lib.rs").exists());
+    }
+
+    #[test]
+    fn restore_snapshot_file_not_in_snapshot() {
+        let dir = setup_snapshot_project();
+        let index = Index::open(dir.path()).unwrap();
+        let entries = index.read_all().unwrap();
+        let state: Vec<IndexEntry> = entries
+            .into_iter()
+            .filter(|e| e.event_type == "snapshot" && e.label.as_deref() == Some("my-snap"))
+            .filter(|e| e.relative_path == "src/nonexistent.rs")
+            .collect();
+        assert!(state.is_empty());
     }
 }

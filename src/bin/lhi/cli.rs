@@ -85,6 +85,9 @@ enum Command {
         /// Time to restore to (e.g. 5m, 14:30, ISO 8601)
         #[arg(long)]
         before: Option<String>,
+        /// Restore to a named snapshot
+        #[arg(long)]
+        snapshot: Option<String>,
         /// Preview without making changes
         #[arg(long)]
         dry_run: bool,
@@ -136,6 +139,7 @@ pub fn run() -> anyhow::Result<()> {
             rev,
             at,
             before,
+            snapshot,
             dry_run,
             json,
         } => commands::restore(
@@ -143,6 +147,7 @@ pub fn run() -> anyhow::Result<()> {
             rev.as_deref(),
             at.as_deref(),
             before.as_deref(),
+            snapshot.as_deref(),
             dry_run,
             json,
         ),
